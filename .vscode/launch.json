@@ -1,0 +1,49 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Tauri: Development Debug",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": [
+          "build",
+          "--manifest-path=./src-tauri/Cargo.toml",
+          "--no-default-features"
+        ],
+        "filter": {
+          "name": "project-manager-tools",
+          "kind": "bin"
+        }
+      },
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "RUST_BACKTRACE": "1"
+      },
+      "preLaunchTask": "ui:dev",
+      "sourceLanguages": ["rust"]
+    },
+    {
+      "name": "Tauri: Production Debug",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": [
+          "build",
+          "--release",
+          "--manifest-path=./src-tauri/Cargo.toml"
+        ],
+        "filter": {
+          "name": "project-manager-tools",
+          "kind": "bin"
+        }
+      },
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "RUST_BACKTRACE": "1"
+      },
+      "preLaunchTask": "ui:build",
+      "sourceLanguages": ["rust"]
+    }
+  ]
+}
