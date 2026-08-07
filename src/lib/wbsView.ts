@@ -23,6 +23,7 @@ export type WbsGroup = {
 export type WbsTreeItem = { task: WbsTask; depth: number };
 
 export type TimelineDateRange = { start: string; end: string; days: number };
+export type TimelineMonth = { key: string; label: string; days: number };
 
 export function buildTimelineDateRange(
   tasks: WbsTask[],
@@ -40,6 +41,24 @@ export function buildTimelineDateRange(
   const span = Math.round((parseISODate(latest).getTime() - parseISODate(start).getTime()) / 86_400_000) + 1;
   const days = Math.max(minimumDays, span);
   return { start, end: addCalendarDays(start, days - 1), days };
+}
+
+export function buildTimelineMonths(dates: string[]): TimelineMonth[] {
+  const months: TimelineMonth[] = [];
+  for (const date of dates) {
+    const key = date.slice(0, 7);
+    const current = months[months.length - 1];
+    if (current?.key === key) current.days += 1;
+    else {
+      const parsed = parseISODate(date);
+      months.push({
+        key,
+        label: `${parsed.getFullYear()}年${parsed.getMonth() + 1}月`,
+        days: 1,
+      });
+    }
+  }
+  return months;
 }
 
 export function filterWbsTasks(tasks: WbsTask[], filters: WbsFilters): WbsTask[] {

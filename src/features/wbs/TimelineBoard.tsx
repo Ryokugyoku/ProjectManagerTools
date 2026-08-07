@@ -6,7 +6,7 @@ import {
 import type { Project } from "../../lib/projects";
 import type { Milestone } from "../../lib/milestones";
 import type { Assignee, WbsTask } from "../../lib/wbs";
-import { buildTimelineDateRange, buildWbsGroups, flattenWbsTaskTree, type WbsGroupBy } from "../../lib/wbsView";
+import { buildTimelineDateRange, buildTimelineMonths, buildWbsGroups, flattenWbsTaskTree, type WbsGroupBy } from "../../lib/wbsView";
 
 const DAY_WIDTH = 42;
 
@@ -14,8 +14,9 @@ type Schedule = { plannedStart: string; plannedEnd: string; businessDays: number
 type DragState = {
   task: WbsTask; mode: "move" | "left" | "right"; startX: number; preview: Schedule;
 };
+type ContextMenuState = { task: WbsTask; x: number; y: number };
 
-export function TimelineBoard({ tasks, milestones, assignees, projects, groupBy, countryCode, selectedId, onSelect, onSelectMilestone, onScheduleChange }: {
+export function TimelineBoard({ tasks, milestones, assignees, projects, groupBy, countryCode, selectedId, onSelect, onCreateSubtask, onSelectMilestone, onScheduleChange }: {
   tasks: WbsTask[];
   milestones: Milestone[];
   assignees: Assignee[];
@@ -24,15 +25,25 @@ export function TimelineBoard({ tasks, milestones, assignees, projects, groupBy,
   countryCode: string;
   selectedId: number | null;
   onSelect: (task: WbsTask) => void;
+  onCreateSubtask: (task: WbsTask) => void;
   onSelectMilestone: (milestone: Milestone) => void;
   onScheduleChange: (task: WbsTask, schedule: Schedule) => Promise<void>;
 }) {
   const [drag, setDrag] = useState<DragState | null>(null);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [visibleMonth, setVisibleMonth] = useState("");
   const didDrag = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const contextMenuRef = useRef<HTMLDivElement>(null);
   const today = formatISODate(new Date());
   const range = useMemo(() => buildTimelineDateRange(tasks, milestones, today), [milestones, tasks, today]);
   const dates = useMemo(() => Array.from({ length: range.days }, (_, index) => addCalendarDays(range.start, index)), [range]);
+  const months = useMemo(() => buildTimelineMonths(dates), [dates]);
+  const milestonesByDate = useMemo(() => {
+    const result = new Map<string, Milestone[]>();
+    for (const milestone of milestones) result.set(milestone.dueDate, [...(result.get(milestone.dueDate) ?? []), milestone]);
+    return result;
+  }, [milestones]);
   const groups = useMemo(() => buildWbsGroups(tasks, groupBy, projects, assignees), [assignees, groupBy, projects, tasks]);
 
   function scrollByDays(days: number) {
@@ -43,6 +54,43 @@ export function TimelineBoard({ tasks, milestones, assignees, projects, groupBy,
     const left = Math.max(0, dayDifference(range.start, date) * DAY_WIDTH - 420);
     scrollRef.current?.scrollTo({ left, behavior: "smooth" });
   }
+
+  function updateVisibleMonth() {
+    const index = Math.min(dates.length - 1, Math.max(0, Math.floor((scrollRef.current?.scrollLeft ?? 0) / DAY_WIDTH)));
+    const parsed = parseISODate(dates[index] ?? range.start);
+    setVisibleMonth(`${parsed.getFullYear()}年${parsed.getMonth() + 1}月`);
+    setContextMenu(null);
+  }
+
+  function openContextMenu(event: React.MouseEvent | React.KeyboardEvent, task: WbsTask) {
+    event.preventDefault();
+    onSelect(task);
+    const keyboard = "key" in event;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const sourceX = keyboard ? rect.left + 24 : event.clientX;
+    const sourceY = keyboard ? rect.top + 24 : event.clientY;
+    setContextMenu({
+      task,
+      x: Math.min(sourceX, window.innerWidth - 220),
+      y: Math.min(sourceY, window.innerHeight - 72),
+    });
+  }
+
+  useEffect(() => { updateVisibleMonth(); }, [range.start]);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    function close(event: PointerEvent) {
+      if (!contextMenuRef.current?.contains(event.target as Node)) setContextMenu(null);
+    }
+    function keydown(event: KeyboardEvent) {
+      if (event.key === "Escape") setContextMenu(null);
+    }
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", keydown);
+    requestAnimationFrame(() => contextMenuRef.current?.querySelector<HTMLElement>("button")?.focus());
+    return () => { window.removeEventListener("pointerdown", close); window.removeEventListener("keydown", keydown); };
+  }, [contextMenu]);
 
   useEffect(() => {
     if (!drag) return;
@@ -108,22 +156,23 @@ export function TimelineBoard({ tasks, milestones, assignees, projects, groupBy,
 
   return <section className="roadmap-card" aria-label="WBSロードマップ">
     <div className="roadmap-toolbar">
-      <div><strong>ロードマップ</strong><span>{groupBy === "project" ? "案件" : "責任者"}ごとに表示</span></div>
+      <div><strong>ロードマップ</strong><span>{groupBy === "project" ? "案件" : "責任者"}ごとに表示</span><span className="visible-month" aria-live="polite">表示中：{visibleMonth}</span></div>
       <div className="range-controls" aria-label="時間軸の移動">
         <button aria-label="2週間前へ移動" onClick={() => scrollByDays(-14)}>‹ 2週間</button>
         <button onClick={() => scrollToDate(today)}>今日へ</button>
         <button aria-label="2週間後へ移動" onClick={() => scrollByDays(14)}>2週間 ›</button>
       </div>
     </div>
-    <div className="roadmap-scroll" ref={scrollRef} tabIndex={0} aria-label="横スクロール可能なWBS時間軸">
+    <div className="roadmap-scroll" ref={scrollRef} tabIndex={0} aria-label="横スクロール可能なWBS時間軸" onScroll={updateVisibleMonth}>
       <div className="roadmap" style={{ "--timeline-width": `${range.days * DAY_WIDTH}px`, "--timeline-days": range.days } as React.CSSProperties}>
         <div className="roadmap-head info-columns"><span>WBS</span><span>状態</span><span>進捗</span></div>
         <div className="roadmap-head date-columns">
-          {dates.map((date) => <DayColumn key={date} date={date} countryCode={countryCode} header />)}
+          <div className="month-bands">{months.map((month) => <div className="month-band" key={month.key} style={{ width: month.days * DAY_WIDTH }}><span>{month.label}</span></div>)}</div>
+          <div className="day-headings">{dates.map((date) => <DayColumn key={date} date={date} countryCode={countryCode} milestones={milestonesByDate.get(date)} header />)}</div>
         </div>
         {milestones.length > 0 && <div className="milestone-roadmap-row">
           <div className="milestone-roadmap-info"><strong>◆ マイルストーン</strong><small>{milestones.length}件 · クリックで詳細</small></div>
-          <div className="milestone-timeline">{dates.map((date) => <DayColumn key={date} date={date} countryCode={countryCode} />)}
+          <div className="milestone-timeline">{dates.map((date) => <DayColumn key={date} date={date} countryCode={countryCode} milestones={milestonesByDate.get(date)} />)}
             {milestones.map((milestone, index) => <button key={milestone.id} className={`milestone-pin ${milestone.completed ? "completed" : ""}`} style={{ left: dayDifference(range.start, milestone.dueDate) * DAY_WIDTH + DAY_WIDTH / 2, top: 8 + (index % 2) * 28 }} onClick={() => onSelectMilestone(milestone)} title={`${milestone.name} · ${milestone.dueDate}`} aria-label={`${milestone.name}、${milestone.dueDate}、${milestone.completed ? "達成済み" : "予定"}`}><span aria-hidden="true">◆</span><b>{milestone.name}</b><time dateTime={milestone.dueDate}>{formatShortDate(milestone.dueDate)}</time></button>)}
           </div>
         </div>}
@@ -133,11 +182,11 @@ export function TimelineBoard({ tasks, milestones, assignees, projects, groupBy,
             const schedule = drag?.task.id === task.id ? drag.preview : task;
             const left = dayDifference(range.start, schedule.plannedStart) * DAY_WIDTH;
             const width = Math.max(DAY_WIDTH, (dayDifference(schedule.plannedStart, schedule.plannedEnd) + 1) * DAY_WIDTH);
-            return <div className={`roadmap-row ${selectedId === task.id ? "selected" : ""}`} key={task.id}>
+            return <div className={`roadmap-row ${selectedId === task.id ? "selected" : ""}`} key={task.id} onContextMenu={(event) => openContextMenu(event, task)} onKeyDown={(event) => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) openContextMenu(event, task); }}>
               <button className="task-info" style={{ "--task-depth": depth } as React.CSSProperties} onClick={() => onSelect(task)}><strong>{depth > 0 && <span className="task-branch" aria-hidden="true">↳</span>}{task.title}</strong><small>{task.parentTaskTitle ? `親: ${task.parentTaskTitle} · ` : ""}{task.assigneeName ?? "責任者未設定"}</small></button>
               <span className={`status-cell ${task.status}`}>{statusLabel(task.status)}</span>
               <span className="progress-cell">{task.progress}%</span>
-              <div className="timeline-cells">{dates.map((date) => <DayColumn key={date} date={date} countryCode={countryCode} />)}
+              <div className="timeline-cells">{dates.map((date) => <DayColumn key={date} date={date} countryCode={countryCode} milestones={milestonesByDate.get(date)} />)}
                 <div className={`timeline-bar ${task.status} ${drag?.task.id === task.id ? "dragging" : ""}`} style={{ left, width }}>
                   <button className="resize-handle left" aria-label={`${task.title}の営業日数を1日減らす。ドラッグで開始側を調整`} onPointerDown={(event) => begin(event, task, "left")} onClick={() => void clickDuration(task, -1)} onKeyDown={(event) => void keyboardAdjust(event, task, "left")}>−</button>
                   <button className="bar-body" title="ドラッグで開始日を移動" onPointerDown={(event) => begin(event, task, "move")} onKeyDown={(event) => void keyboardAdjust(event, task, "move")}><i style={{ width: `${task.progress}%` }} /><span>{task.title}</span></button>
@@ -150,15 +199,18 @@ export function TimelineBoard({ tasks, milestones, assignees, projects, groupBy,
       </div>
     </div>
     <div className="roadmap-help"><strong>横にスクロールして期間を確認</strong><span>中央をドラッグ：開始日を移動</span><span>左右端をドラッグ：営業日数を変更</span><span>← → キーでも調整可能</span></div>
+    {contextMenu && <div className="task-context-menu" ref={contextMenuRef} role="menu" aria-label={`${contextMenu.task.title}の操作`} style={{ left: contextMenu.x, top: contextMenu.y }}><button role="menuitem" onClick={() => { const task = contextMenu.task; setContextMenu(null); onCreateSubtask(task); }}>＋ サブタスクを追加</button></div>}
   </section>;
 }
 
-function DayColumn({ date, countryCode, header = false }: { date: string; countryCode: string; header?: boolean }) {
+function DayColumn({ date, countryCode, milestones = [], header = false }: { date: string; countryCode: string; milestones?: Milestone[]; header?: boolean }) {
   const holiday = holidayName(date, countryCode);
   const business = isBusinessDay(date, countryCode);
   const parsed = parseISODate(date);
-  return <div className={`timeline-day ${!business ? "off" : ""} ${date === formatISODate(new Date()) ? "current" : ""}`} title={holiday ?? (!business ? "休日" : date)}>
+  const milestoneLabel = milestones.map((milestone) => milestone.name).join("、");
+  return <div className={`timeline-day ${!business ? "off" : ""} ${date === formatISODate(new Date()) ? "current" : ""} ${milestones.length > 0 ? "milestone-column" : ""}`} title={milestoneLabel || holiday || (!business ? "休日" : date)}>
     {header && <><small>{parsed.toLocaleDateString("ja-JP", { weekday: "short" })}</small><strong>{parsed.getDate()}</strong>{holiday && <i>祝</i>}</>}
+    {header && milestones.length > 0 && <span className="milestone-column-mark" aria-label={`マイルストーン：${milestoneLabel}`}>◆{milestones.length > 1 ? milestones.length : ""}</span>}
   </div>;
 }
 

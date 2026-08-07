@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildTimelineDateRange, buildWbsGroups, filterWbsTasks, flattenWbsTaskTree, parentTaskCandidates, summarizeWbsTasks, type WbsFilters } from "../../src/lib/wbsView";
+import { buildTimelineDateRange, buildTimelineMonths, buildWbsGroups, filterWbsTasks, flattenWbsTaskTree, parentTaskCandidates, summarizeWbsTasks, type WbsFilters } from "../../src/lib/wbsView";
 import type { Milestone } from "../../src/lib/milestones";
 import type { Project } from "../../src/lib/projects";
 import type { Assignee, WbsTask } from "../../src/lib/wbs";
@@ -46,5 +46,13 @@ describe("WBS view methods", () => {
   it("builds a horizontally scrollable range that includes tasks, milestones, and padding", () => {
     expect(buildTimelineDateRange(tasks, milestones, "2026-08-06")).toEqual({ start: "2026-06-24", end: "2026-09-08", days: 77 });
     expect(buildTimelineDateRange([], [], "2026-08-06")).toEqual({ start: "2026-07-30", end: "2026-09-09", days: 42 });
+  });
+
+  it("groups the visible date headers by month", () => {
+    expect(buildTimelineMonths(["2026-08-30", "2026-08-31", "2026-09-01", "2026-09-02"])).toEqual([
+      { key: "2026-08", label: "2026年8月", days: 2 },
+      { key: "2026-09", label: "2026年9月", days: 2 },
+    ]);
+    expect(buildTimelineMonths([])).toEqual([]);
   });
 });

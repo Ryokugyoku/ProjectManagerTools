@@ -8,6 +8,8 @@ describe("WBSの操作文言", () => {
     expect(appSource).toContain("＋ ロードマップにタスクを追加");
     expect(appSource).toContain("＋ ロードマップ上でサブタスクを追加");
     expect(appSource).toContain('initialParentTaskId === null ? "ロードマップにタスクを追加" : "サブタスクを追加"');
+    expect(appSource).toContain("onCreateSubtask={(task) => openTaskCreate(task.id)}");
+    expect(appSource).toContain("parentTask?.projectId ?? initialProjectId");
   });
 
   it("5営業日以上ではサブタスクとしての分割を案内する", () => {
