@@ -4,9 +4,9 @@ import { calculateEndDate, countries, formatISODate } from "./lib/calendar";
 import {
   createWbsTask, deleteWbsTask, getSettings, listAssignees, listWbsTasks,
   saveDailyProgress, saveSettings, updateWbsTask, type AppSettings, type Assignee, type WbsStatus, type WbsTask,
-  type WbsTaskInput,
 } from "./lib/wbs";
 import { TimelineBoard } from "./features/wbs/TimelineBoard";
+import { businessDaysOrDefault, parseBusinessDaysInput, type WbsTaskForm } from "./features/wbs/taskForm";
 import { WbsProjectSelector } from "./features/wbs/WbsProjectSelector";
 import { UsersScreen } from "./features/users/UsersScreen";
 import { SettingsScreen } from "./features/settings/SettingsScreen";
@@ -254,19 +254,20 @@ function TaskModal({ settings, projects, assignees, tasks, initialProjectId, ini
   settings: AppSettings; projects: Project[]; assignees: Assignee[]; tasks: WbsTask[]; initialProjectId: number | null; initialParentTaskId: number | null; onClose: () => void; onSaved: () => Promise<void>; onError: (value: string | null) => void;
 }) {
   const today = formatISODate(new Date());
-  const [form, setForm] = useState<WbsTaskInput>({
+  const [form, setForm] = useState<WbsTaskForm>({
     title: "", description: "", projectId: initialProjectId, parentTaskId: initialParentTaskId, assigneeId: null, status: "not_started", progress: 0,
     countryCode: settings.countryCode, plannedStart: today,
-    plannedEnd: calculateEndDate(today, 1, settings.countryCode), businessDays: 1,
+    plannedEnd: calculateEndDate(today, 1, settings.countryCode), businessDays: "",
     actualStart: null, actualEnd: null,
   });
   const [saving, setSaving] = useState(false);
-  const end = calculateEndDate(form.plannedStart, form.businessDays, form.countryCode);
-  const average = 100 / Math.max(1, form.businessDays);
+  const businessDays = businessDaysOrDefault(form.businessDays);
+  const end = calculateEndDate(form.plannedStart, businessDays, form.countryCode);
+  const average = 100 / businessDays;
 
   async function submit(event: FormEvent) {
     event.preventDefault(); setSaving(true);
-    try { await createWbsTask({ ...form, plannedEnd: end }); await onSaved(); }
+    try { await createWbsTask({ ...form, businessDays, plannedEnd: end }); await onSaved(); }
     catch (cause) { onError(toMessage(cause)); setSaving(false); }
   }
 
@@ -278,7 +279,7 @@ function TaskModal({ settings, projects, assignees, tasks, initialProjectId, ini
         <div><small>終了予定日</small><strong>{formatLongDate(end)}</strong></div>
         <div><small>1日の平均進捗</small><strong>{average.toFixed(1)}%</strong></div>
       </div>
-      {form.businessDays >= 5 && <div className="warning" role="status"><strong>サブタスクへの分割をおすすめします</strong><span>5営業日以上のタスクです。完了条件が明確な小さなサブタスクとして分割すると、遅れを早く発見できます。</span></div>}
+      {businessDays >= 5 && <div className="warning" role="status"><strong>サブタスクへの分割をおすすめします</strong><span>5営業日以上のタスクです。完了条件が明確な小さなサブタスクとして分割すると、遅れを早く発見できます。</span></div>}
       <div className="modal-actions"><button type="button" className="quiet-button" onClick={onClose}>キャンセル</button><button className="primary-button" disabled={saving || !form.title.trim()}>{saving ? "保存中…" : "登録する"}</button></div>
     </form>
   </Modal>;
@@ -287,14 +288,15 @@ function TaskModal({ settings, projects, assignees, tasks, initialProjectId, ini
 function TaskEditor({ task, tasks, countryCode, projects, assignees, onChanged, onCreateChild, onProgress, onDelete, onError }: {
   task: WbsTask; tasks: WbsTask[]; countryCode: string; projects: Project[]; assignees: Assignee[]; onChanged: () => Promise<void>; onCreateChild: () => void; onProgress: () => void; onDelete: () => void; onError: (value: string | null) => void;
 }) {
-  const [form, setForm] = useState<WbsTaskInput>({ ...task, countryCode });
+  const [form, setForm] = useState<WbsTaskForm>({ ...task, countryCode });
   const [saving, setSaving] = useState(false);
   useEffect(() => setForm({ ...task, countryCode }), [task, countryCode]);
-  const end = calculateEndDate(form.plannedStart, form.businessDays, countryCode);
+  const businessDays = businessDaysOrDefault(form.businessDays);
+  const end = calculateEndDate(form.plannedStart, businessDays, countryCode);
 
   async function submit(event: FormEvent) {
     event.preventDefault(); setSaving(true);
-    try { await updateWbsTask(task.id, { ...form, countryCode, plannedEnd: end }); await onChanged(); }
+    try { await updateWbsTask(task.id, { ...form, businessDays, countryCode, plannedEnd: end }); await onChanged(); }
     catch (cause) { onError(toMessage(cause)); } finally { setSaving(false); }
   }
 
@@ -309,7 +311,7 @@ function TaskEditor({ task, tasks, countryCode, projects, assignees, onChanged, 
 }
 
 function FormFields({ form, setForm, projects, assignees, tasks, currentTaskId, includeActual }: {
-  form: WbsTaskInput; setForm: (value: WbsTaskInput) => void; projects: Project[]; assignees: Assignee[]; tasks: WbsTask[]; currentTaskId: number | null; includeActual: boolean;
+  form: WbsTaskForm; setForm: (value: WbsTaskForm) => void; projects: Project[]; assignees: Assignee[]; tasks: WbsTask[]; currentTaskId: number | null; includeActual: boolean;
 }) {
   const selectedProject = projects.find((project) => project.id === form.projectId);
   const availableAssignees = selectedProject
@@ -320,10 +322,10 @@ function FormFields({ form, setForm, projects, assignees, tasks, currentTaskId, 
     <label className="wide">タスク名<input value={form.title} maxLength={120} required onChange={(e) => setForm({ ...form, title: e.currentTarget.value })} placeholder="例：要件定義レビュー" /></label>
     <label className="wide">説明<textarea value={form.description} maxLength={1000} rows={2} onChange={(e) => setForm({ ...form, description: e.currentTarget.value })} placeholder="完了条件や補足" /></label>
     <label>所属案件<select value={form.projectId ?? ""} onChange={(e) => { const projectId = e.currentTarget.value ? Number(e.currentTarget.value) : null; const project = projects.find((item) => item.id === projectId); const keepAssignee = !project || project.members.some((member) => member.userId === form.assigneeId); const keepParent = tasks.some((task) => task.id === form.parentTaskId && task.projectId === projectId); setForm({ ...form, projectId, parentTaskId: keepParent ? form.parentTaskId : null, assigneeId: keepAssignee ? form.assigneeId : null }); }}><option value="">案件未設定</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
-    <label>責任者<select value={form.assigneeId ?? ""} onChange={(e) => setForm({ ...form, assigneeId: e.currentTarget.value ? Number(e.currentTarget.value) : null })}><option value="">未設定</option>{availableAssignees.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select>{selectedProject && availableAssignees.length === 0 && <small>この案件にはユーザーが紐づいていません。</small>}</label>
+    <label>担当者<select value={form.assigneeId ?? ""} onChange={(e) => setForm({ ...form, assigneeId: e.currentTarget.value ? Number(e.currentTarget.value) : null })}><option value="">未設定</option>{availableAssignees.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select>{selectedProject && availableAssignees.length === 0 && <small>この案件にはユーザーが紐づいていません。</small>}</label>
     <label className="wide">親タスク<select value={form.parentTaskId ?? ""} onChange={(e) => setForm({ ...form, parentTaskId: e.currentTarget.value ? Number(e.currentTarget.value) : null })}><option value="">親なし（最上位）</option>{availableParents.map((task) => <option key={task.id} value={task.id}>{task.parentTaskTitle ? `${task.parentTaskTitle} › ` : ""}{task.title}</option>)}</select><small>子タスクにも同じ操作で子を追加でき、階層を深くできます。</small></label>
     <label>開始予定日<input type="date" required value={form.plannedStart} onChange={(e) => setForm({ ...form, plannedStart: e.currentTarget.value })} /></label>
-    <label>営業日数<input type="number" min="1" max="999" required placeholder="1" value={form.businessDays} onChange={(e) => setForm({ ...form, businessDays: Math.max(1, Number(e.currentTarget.value)) })} />{!includeActual && <small>初期値は1営業日です。</small>}</label>
+    <label>営業日数<input type="number" min="1" max="999" placeholder="1" value={form.businessDays} onChange={(e) => setForm({ ...form, businessDays: parseBusinessDaysInput(e.currentTarget.value) })} />{!includeActual && <small>未入力の場合は1営業日です。</small>}</label>
     {includeActual && <>
       <label>状態<select value={form.status} onChange={(e) => setForm({ ...form, status: e.currentTarget.value as WbsStatus })}>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
       <span />

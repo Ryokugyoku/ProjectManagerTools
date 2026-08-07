@@ -11,8 +11,15 @@ describe("WBSの操作文言", () => {
   });
 
   it("5営業日以上ではサブタスクとしての分割を案内する", () => {
-    expect(appSource).toContain("form.businessDays >= 5");
+    expect(appSource).toContain("businessDays >= 5");
     expect(appSource).toContain("サブタスクへの分割をおすすめします");
     expect(appSource).toContain("小さなサブタスクとして分割すると");
+  });
+
+  it("タスク入力では担当者と表示し、営業日数の1はプレースホルダーにする", () => {
+    expect(appSource).toContain("<label>担当者<select");
+    expect(appSource).toContain('placeholder="1" value={form.businessDays}');
+    expect(appSource).toContain("未入力の場合は1営業日です。");
+    expect(appSource).not.toContain("Math.max(1, Number(e.currentTarget.value))");
   });
 });

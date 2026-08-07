@@ -235,7 +235,7 @@ async function validateProjectAssignment(db: Database, projectId: number | null,
     "SELECT COUNT(*) AS count FROM project_members WHERE project_id=$1 AND user_id=$2",
     [projectId, assigneeId],
   );
-  if ((rows[0]?.count ?? 0) === 0) throw new Error("責任者は選択した案件のメンバーではありません。");
+  if ((rows[0]?.count ?? 0) === 0) throw new Error("担当者は選択した案件のメンバーではありません。");
 }
 
 async function validateParentTask(db: Database, taskId: number | null, projectId: number | null, parentTaskId: number | null) {
