@@ -5,7 +5,7 @@ vi.mock("@tauri-apps/plugin-sql", () => ({ default: { load: vi.fn(async () => db
 
 import {
   createAssignee, createWbsTask, deleteAssignee, deleteWbsTask, getSettings,
-  finalizeWbsTask, listAssignees, listTaskHistory, listWbsTasks, saveDailyProgress, saveScheduleChanges, saveSettings, updateAssignee,
+  finalizeWbsTask, listAssignees, listTaskHistory, listTaskTreeHistory, listWbsTasks, saveDailyProgress, saveScheduleChanges, saveSettings, updateAssignee,
   updateWbsTask, type AppSettings, type UserProfileInput, type WbsTaskInput,
 } from "../../src/lib/wbs";
 
@@ -53,6 +53,7 @@ describe("WBS data methods", () => {
     db.select.mockResolvedValue([{ parent_project_id: 4, is_descendant: 0 }]);
     await createWbsTask({ ...task, projectId: 4, parentTaskId: 7 });
     expect(db.execute).toHaveBeenCalledWith(expect.stringContaining("parent_task_id"), expect.arrayContaining([4, 7]));
+    expect(db.execute).toHaveBeenCalledWith(expect.stringContaining("'created'"), [7, "サブタスク「設計」を追加しました。"]);
 
     db.select.mockResolvedValue([{ parent_project_id: 5, is_descendant: 0 }]);
     await expect(createWbsTask({ ...task, projectId: 4, parentTaskId: 7 })).rejects.toThrow("同じ案件");
@@ -127,12 +128,21 @@ describe("WBS data methods", () => {
     await saveScheduleChanges([{ taskId: 7, plannedStart: "2026-08-07", plannedEnd: "2026-08-14", businessDays: 5 }], " 顧客都合 ");
     expect(db.execute).toHaveBeenCalledTimes(2);
     expect(db.execute).toHaveBeenLastCalledWith(expect.stringContaining("'rescheduled'"), [7, "顧客都合", "2026-08-06〜2026-08-13 → 2026-08-07〜2026-08-14"]);
+    db.execute.mockClear();
+    await saveScheduleChanges([{ taskId: 8, plannedStart: "2026-08-08", plannedEnd: "2026-08-15", businessDays: 5, historyContext: "親タスク「親」の移動に連動" }], " 顧客都合 ");
+    expect(db.execute).toHaveBeenLastCalledWith(expect.stringContaining("'rescheduled'"), [8, "顧客都合", "親タスク「親」の移動に連動。2026-08-06〜2026-08-13 → 2026-08-08〜2026-08-15"]);
   });
 
   it("loads work history in chronological order", async () => {
     db.select.mockResolvedValue([{ id: 2, task_id: 7, event_type: "delay", reason: "待ち", details: "20%", occurred_at: "2026-08-06T01:00:00Z" }]);
     expect(await listTaskHistory(7)).toEqual([{ id: 2, taskId: 7, type: "delay", reason: "待ち", details: "20%", occurredAt: "2026-08-06T01:00:00Z" }]);
     expect(db.select).toHaveBeenCalledWith(expect.stringContaining("ORDER BY occurred_at ASC"), [7]);
+  });
+
+  it("loads the selected task and descendant history with source context", async () => {
+    db.select.mockResolvedValue([{ id: 3, task_id: 8, event_type: "progress", reason: "", details: "累計 50%", occurred_at: "2026-08-07T01:00:00Z", task_title: "実装", depth: 1 }]);
+    expect(await listTaskTreeHistory(7)).toEqual([{ id: 3, taskId: 8, type: "progress", reason: "", details: "累計 50%", occurredAt: "2026-08-07T01:00:00Z", taskTitle: "実装", depth: 1 }]);
+    expect(db.select).toHaveBeenCalledWith(expect.stringContaining("WITH RECURSIVE task_tree"), [7]);
   });
 });
 

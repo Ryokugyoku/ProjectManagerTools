@@ -1,5 +1,5 @@
 import Database from "@tauri-apps/plugin-sql";
-import { expectedProgress } from "./wbsPlanning";
+import { deriveParentProgress, expectedProgress } from "./wbsPlanning";
 
 const DATABASE_URL = "sqlite:project-manager.db";
 
@@ -51,8 +51,9 @@ export type AppSettings = {
   notificationsEnabled: boolean;
   lastNotifiedDate: string | null;
 };
-export type WorkHistoryType = "finalized" | "rescheduled" | "progress" | "delay";
+export type WorkHistoryType = "created" | "finalized" | "rescheduled" | "progress" | "delay";
 export type WorkHistoryEntry = { id: number; taskId: number; type: WorkHistoryType; reason: string; details: string; occurredAt: string };
+export type TaskTreeHistoryEntry = WorkHistoryEntry & { taskTitle: string; depth: number };
 
 type WbsTaskRow = {
   id: number; title: string; description: string; project_id: number | null;
@@ -67,6 +68,7 @@ type WbsTaskRow = {
   latest_delay_reason: string | null;
 };
 type WorkHistoryRow = { id: number; task_id: number; event_type: WorkHistoryType; reason: string; details: string; occurred_at: string };
+type TaskTreeHistoryRow = WorkHistoryRow & { task_title: string; depth: number };
 type AssigneeRow = {
   id: number; name: string; email: string; birthday: string | null;
   department: string; role: string; timezone: string; interests: string;
@@ -103,7 +105,7 @@ export async function listWbsTasks(date = localISODate()): Promise<WbsTask[]> {
     LEFT JOIN wbs_progress_logs today_log ON today_log.task_id=w.id AND today_log.log_date=$1
     ORDER BY w.planned_start, w.id
   `, [date]);
-  return rows.map(mapTask);
+  return deriveParentProgress(rows.map(mapTask));
 }
 
 export async function createWbsTask(input: WbsTaskInput): Promise<void> {
@@ -117,6 +119,11 @@ export async function createWbsTask(input: WbsTaskInput): Promise<void> {
        planned_start, planned_end, business_days, actual_start, actual_end)
     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
   `, taskValues(input));
+  if (input.parentTaskId !== null) {
+    await db.execute("INSERT INTO wbs_work_history (task_id, event_type, details) VALUES ($1, 'created', $2)", [
+      input.parentTaskId, `サブタスク「${input.title.trim()}」を追加しました。`,
+    ]);
+  }
 }
 
 export async function updateWbsTask(id: number, input: WbsTaskInput): Promise<void> {
@@ -148,7 +155,7 @@ export async function finalizeWbsTask(taskId: number): Promise<void> {
   await db.execute("INSERT INTO wbs_work_history (task_id, event_type, details) VALUES ($1, 'finalized', $2)", [taskId, "タスクの計画を確定しました。"]);
 }
 
-export async function saveScheduleChanges(changes: Array<{ taskId: number; plannedStart: string; plannedEnd: string; businessDays: number }>, reason: string): Promise<void> {
+export async function saveScheduleChanges(changes: Array<{ taskId: number; plannedStart: string; plannedEnd: string; businessDays: number; historyContext?: string }>, reason: string): Promise<void> {
   const normalizedReason = reason.trim();
   if (!normalizedReason) throw new Error("リスケ理由を入力してください。");
   const db = await database();
@@ -158,8 +165,10 @@ export async function saveScheduleChanges(changes: Array<{ taskId: number; plann
     if (!before) throw new Error("変更対象のタスクが見つかりません。");
     await db.execute(`UPDATE wbs_tasks SET planned_start=$1, planned_end=$2, business_days=$3,
       updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id=$4`, [change.plannedStart, change.plannedEnd, change.businessDays, change.taskId]);
+    const context = change.historyContext?.trim();
+    const scheduleDetails = `${before.planned_start}〜${before.planned_end} → ${change.plannedStart}〜${change.plannedEnd}`;
     await db.execute("INSERT INTO wbs_work_history (task_id, event_type, reason, details) VALUES ($1, 'rescheduled', $2, $3)", [
-      change.taskId, normalizedReason, `${before.planned_start}〜${before.planned_end} → ${change.plannedStart}〜${change.plannedEnd}`,
+      change.taskId, normalizedReason, context ? `${context}。${scheduleDetails}` : scheduleDetails,
     ]);
   }
 }
@@ -203,6 +212,24 @@ export async function listTaskHistory(taskId: number): Promise<WorkHistoryEntry[
   const rows = await db.select<WorkHistoryRow[]>(`SELECT id, task_id, event_type, reason, details, occurred_at
     FROM wbs_work_history WHERE task_id=$1 ORDER BY occurred_at ASC, id ASC`, [taskId]);
   return rows.map((row) => ({ id: row.id, taskId: row.task_id, type: row.event_type, reason: row.reason, details: row.details, occurredAt: row.occurred_at }));
+}
+
+export async function listTaskTreeHistory(taskId: number): Promise<TaskTreeHistoryEntry[]> {
+  const db = await database();
+  const rows = await db.select<TaskTreeHistoryRow[]>(`WITH RECURSIVE task_tree(id, title, depth) AS (
+      SELECT id, title, 0 FROM wbs_tasks WHERE id=$1
+      UNION ALL
+      SELECT child.id, child.title, task_tree.depth + 1
+      FROM wbs_tasks child JOIN task_tree ON child.parent_task_id=task_tree.id
+    )
+    SELECT history.id, history.task_id, history.event_type, history.reason, history.details,
+      history.occurred_at, task_tree.title AS task_title, task_tree.depth
+    FROM task_tree JOIN wbs_work_history history ON history.task_id=task_tree.id
+    ORDER BY history.occurred_at DESC, history.id DESC`, [taskId]);
+  return rows.map((row) => ({
+    id: row.id, taskId: row.task_id, type: row.event_type, reason: row.reason,
+    details: row.details, occurredAt: row.occurred_at, taskTitle: row.task_title, depth: row.depth,
+  }));
 }
 
 export async function listAssignees(): Promise<Assignee[]> {

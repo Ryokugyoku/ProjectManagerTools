@@ -3,8 +3,8 @@ import { isPermissionGranted, sendNotification } from "@tauri-apps/plugin-notifi
 import { calculateEndDate, countries, formatISODate } from "./lib/calendar";
 import {
   createWbsTask, deleteWbsTask, getSettings, listAssignees, listWbsTasks,
-  finalizeWbsTask, listTaskHistory, saveDailyProgress, saveScheduleChanges, saveSettings, updateWbsTask,
-  type AppSettings, type Assignee, type WbsStatus, type WbsTask, type WorkHistoryEntry,
+  finalizeWbsTask, listTaskTreeHistory, saveDailyProgress, saveScheduleChanges, saveSettings, updateWbsTask,
+  type AppSettings, type Assignee, type TaskTreeHistoryEntry, type WbsStatus, type WbsTask, type WorkHistoryEntry,
 } from "./lib/wbs";
 import { buildScheduleCascade, buildScheduleCascadeForNewChild, expectedProgress, scheduleChangesRequireReason, type ScheduleChange, type TaskSchedule } from "./lib/wbsPlanning";
 import { TimelineBoard } from "./features/wbs/TimelineBoard";
@@ -365,7 +365,7 @@ function TaskEditor({ task, tasks, countryCode, projects, assignees, onChanged, 
     <div className="panel-title"><div><p className="eyebrow">DETAIL</p><h2>タスクを編集</h2></div><span className={`status-badge ${form.status}`}>{statusLabels[form.status]}</span></div>
     <div className={`task-lock-state ${task.finalized ? "finalized" : "draft"}`}><div><strong>{task.finalized ? "計画確定済み" : "編集中"}</strong><span>{task.finalized ? "日程変更にはロードマップ上で理由の記録が必要です。" : "確定するまで日程を自由に調整できます。"}</span></div>{!task.finalized && <button type="button" className="quiet-button" disabled={saving} onClick={() => void finalize()}>タスクの状態を確定</button>}</div>
     <FormFields form={form} setForm={setForm} projects={projects} assignees={assignees} tasks={tasks} currentTaskId={task.id} includeActual scheduleLocked={task.finalized} />
-    <div className="progress-block"><div><span>進捗率</span><strong>{form.progress}%</strong></div>{hasChildren ? <small>サブタスクを持つため、このタスクには進捗を直接入力できません。</small> : <><input aria-label="進捗率" type="range" min="0" max="100" step="5" disabled={task.finalized} value={form.progress} onChange={(e) => setForm({ ...form, progress: Number(e.currentTarget.value) })} />{task.finalized && <small>確定後は「今日の進捗」から記録します。</small>}</>}</div>
+    <div className="progress-block"><div><span>{hasChildren ? "子タスクからの進捗" : "進捗率"}</span><strong>{form.progress}%</strong></div>{hasChildren ? <small>直属のサブタスクを営業日数で重み付けし、深い階層まで自動集計しています。</small> : <><input aria-label="進捗率" type="range" min="0" max="100" step="5" disabled={task.finalized} value={form.progress} onChange={(e) => setForm({ ...form, progress: Number(e.currentTarget.value) })} />{task.finalized && <small>確定後は「今日の進捗」から記録します。</small>}</>}</div>
     <button type="button" className="child-task-button" onClick={onCreateChild}>＋ ロードマップ上でサブタスクを追加</button>
     <div className="editor-actions">{dailyProgressActionLabel(task, hasChildren) && <button type="button" className="quiet-button" onClick={onProgress}>{dailyProgressActionLabel(task, false)}</button>}<button className="primary-button" disabled={saving}>{saving ? "保存中…" : "変更を保存"}</button></div>
     <button type="button" className="danger-button" onClick={onDelete}>このタスクを削除</button>
@@ -443,7 +443,7 @@ function RescheduleModal({ task, changes, tasks, onClose, onSaved, onError }: { 
   const [saving, setSaving] = useState(false);
   async function submit(event: FormEvent) {
     event.preventDefault(); setSaving(true);
-    try { await saveScheduleChanges(changes.map((change) => ({ taskId: change.taskId, ...change.after })), reason); await onSaved(); }
+    try { await saveScheduleChanges(changes.map((change) => ({ taskId: change.taskId, ...change.after, historyContext: change.historyContext })), reason); await onSaved(); }
     catch (cause) { onError(toMessage(cause)); setSaving(false); }
   }
   return <Modal title="リスケ理由を記録" onClose={onClose}><form className="modal-form" onSubmit={submit}>
@@ -455,10 +455,21 @@ function RescheduleModal({ task, changes, tasks, onClose, onSaved, onError }: { 
 }
 
 function HistoryModal({ task, onClose, onError }: { task: WbsTask; onClose: () => void; onError: (value: string | null) => void }) {
-  const [entries, setEntries] = useState<WorkHistoryEntry[] | null>(null);
-  useEffect(() => { let active = true; void listTaskHistory(task.id).then((result) => { if (active) setEntries(result); }).catch((cause) => onError(toMessage(cause))); return () => { active = false; }; }, [onError, task.id]);
-  const labels: Record<WorkHistoryEntry["type"], string> = { finalized: "計画確定", rescheduled: "リスケ", progress: "進捗記録", delay: "遅延理由" };
-  return <Modal title="作業経緯" onClose={onClose}><div className="history-modal"><p className="modal-lead">{task.title}</p>{entries === null ? <div className="history-empty">読み込んでいます…</div> : entries.length === 0 ? <div className="history-empty">記録された経緯はありません。</div> : <ol className="history-timeline">{entries.map((entry) => <li key={entry.id} className={entry.type}><time>{formatHistoryTime(entry.occurredAt)}</time><div><span>{labels[entry.type]}</span><p>{entry.details}</p>{entry.reason && <blockquote><strong>理由</strong>{entry.reason}</blockquote>}</div></li>)}</ol>}<div className="modal-actions"><button className="quiet-button" onClick={onClose}>閉じる</button></div></div></Modal>;
+  const [entries, setEntries] = useState<TaskTreeHistoryEntry[] | null>(null);
+  const [scope, setScope] = useState<"all" | "self">("all");
+  const [expanded, setExpanded] = useState(false);
+  useEffect(() => { let active = true; void listTaskTreeHistory(task.id).then((result) => { if (active) setEntries(result); }).catch((cause) => onError(toMessage(cause))); return () => { active = false; }; }, [onError, task.id]);
+  const labels: Record<WorkHistoryEntry["type"], string> = { created: "サブタスク追加", finalized: "計画確定", rescheduled: "リスケ", progress: "進捗記録", delay: "遅延理由" };
+  const ownCount = entries?.filter((entry) => entry.depth === 0).length ?? 0;
+  const childCount = (entries?.length ?? 0) - ownCount;
+  const filtered = entries?.filter((entry) => scope === "all" || entry.depth === 0) ?? [];
+  const visible = expanded ? filtered : filtered.slice(0, 8);
+  return <Modal title="作業経緯" onClose={onClose}><div className="history-modal">
+    <div className="history-overview"><div><p className="modal-lead">{task.title}</p><small>{childCount > 0 ? "親自身と配下の履歴を新しい順に確認できます。" : "このタスクの履歴を新しい順に表示します。"}</small></div>{entries && <strong>{entries.length}<span>件</span></strong>}</div>
+    {entries && childCount > 0 && <div className="history-scope" role="group" aria-label="作業経緯の表示範囲"><button className={scope === "all" ? "active" : ""} aria-pressed={scope === "all"} onClick={() => { setScope("all"); setExpanded(false); }}>配下を含む <span>{entries.length}</span></button><button className={scope === "self" ? "active" : ""} aria-pressed={scope === "self"} onClick={() => { setScope("self"); setExpanded(false); }}>親自身のみ <span>{ownCount}</span></button></div>}
+    {entries === null ? <div className="history-empty">読み込んでいます…</div> : filtered.length === 0 ? <div className="history-empty">この範囲に記録された経緯はありません。</div> : <><ol className="history-timeline">{visible.map((entry) => <li key={entry.id} className={entry.type}><time>{formatHistoryTime(entry.occurredAt)}</time><div><div className="history-entry-meta"><span>{labels[entry.type]}</span>{entry.depth > 0 && <small title={`親から${entry.depth}階層下`}>{entry.taskTitle}</small>}</div><p>{entry.details}</p>{entry.reason && <blockquote><strong>理由</strong>{entry.reason}</blockquote>}</div></li>)}</ol>{filtered.length > 8 && <button type="button" className="history-more" onClick={() => setExpanded((current) => !current)}>{expanded ? "最新8件に戻す" : `さらに${filtered.length - 8}件を表示`}</button>}</>}
+    <div className="modal-actions"><button className="quiet-button" onClick={onClose}>閉じる</button></div>
+  </div></Modal>;
 }
 
 function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {

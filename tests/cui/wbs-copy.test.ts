@@ -24,4 +24,11 @@ describe("WBSの操作文言", () => {
     expect(appSource).toContain("未入力の場合は1営業日です。");
     expect(appSource).not.toContain("Math.max(1, Number(e.currentTarget.value))");
   });
+
+  it("親の進捗と作業経緯を段階的に集約表示する", () => {
+    expect(appSource).toContain("子タスクからの進捗");
+    expect(appSource).toContain("配下を含む");
+    expect(appSource).toContain("親自身のみ");
+    expect(appSource).toContain("さらに${filtered.length - 8}件を表示");
+  });
 });

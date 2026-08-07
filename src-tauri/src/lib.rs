@@ -53,6 +53,12 @@ pub fn run() {
             sql: include_str!("../migrations/0008_add_wbs_governance.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 9,
+            description: "add_wbs_created_history",
+            sql: include_str!("../migrations/0009_add_wbs_created_history.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()

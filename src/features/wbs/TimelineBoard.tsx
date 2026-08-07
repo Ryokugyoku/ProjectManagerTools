@@ -264,7 +264,7 @@ export function TimelineBoard({ tasks, allTasks = tasks, milestones, assignees, 
                 <small>{task.finalized ? "確定" : "編集中"} · {task.parentTaskTitle ? `親: ${task.parentTaskTitle} · ` : ""}{task.assigneeName ?? "責任者未設定"}</small>
               </button>
               <span className={`status-cell ${task.status}`}>{statusLabel(task.status)}</span>
-              <span className={`progress-cell ${health}`} title={`実績 ${task.progress}% / 今日の予定 ${plannedProgress}%`}><strong>{task.progress}%</strong><small>予定 {plannedProgress}%</small></span>
+              <span className={`progress-cell ${health}`} title={`${hasChildren ? "子タスクから自動集計" : "実績"} ${task.progress}% / 今日の予定 ${plannedProgress}%`}><strong>{task.progress}%</strong><small>{hasChildren ? "子から集計" : `予定 ${plannedProgress}%`}</small></span>
               <div className="timeline-cells" style={{ backgroundImage: timelineBackground }}>
                 <div className={`timeline-bar ${task.status} ${health} ${hasChildren ? "has-children" : ""}`} style={{ left, width }}>
                   <button className="resize-handle left" aria-label={`${task.title}の営業日数を1日減らす。ドラッグで開始側を調整`} onPointerDown={(event) => begin(event, task, "left")} onClick={() => void clickDuration(task, -1)} onKeyDown={(event) => void keyboardAdjust(event, task, "left")}>−</button>
