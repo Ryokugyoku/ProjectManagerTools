@@ -163,6 +163,26 @@ export function parentTaskCandidates(tasks: WbsTask[], projectId: number | null,
     .map((item) => item.task);
 }
 
+export function ancestorTrail(tasks: WbsTask[], taskId: number): WbsTask[] {
+  const byId = new Map(tasks.map((task) => [task.id, task]));
+  const result: WbsTask[] = [];
+  const visited = new Set<number>([taskId]);
+  let parentId = byId.get(taskId)?.parentTaskId ?? null;
+  while (parentId !== null && !visited.has(parentId)) {
+    visited.add(parentId);
+    const parent = byId.get(parentId);
+    if (!parent) break;
+    result.unshift(parent);
+    parentId = parent.parentTaskId;
+  }
+  return result;
+}
+
+export function dailyProgressActionLabel(task: Pick<WbsTask, "todayDailyProgress">, hasChildren: boolean): string | null {
+  if (hasChildren) return null;
+  return task.todayDailyProgress == null ? "今日進んだ進捗を入力" : "今日の進捗を編集";
+}
+
 function matchesId(actual: number | null, filter: WbsFilterValue) {
   if (filter === "all") return true;
   if (filter === "unset") return actual === null;

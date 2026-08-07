@@ -38,8 +38,11 @@ export type WbsTask = {
   actualStart: string | null;
   actualEnd: string | null;
   finalized: boolean;
+  todayDailyProgress?: number | null;
+  todayProgressNote?: string;
+  latestDelayReason?: string;
 };
-export type WbsTaskInput = Omit<WbsTask, "id" | "assigneeName" | "projectName" | "parentTaskTitle" | "plannedEnd" | "finalized"> & {
+export type WbsTaskInput = Omit<WbsTask, "id" | "assigneeName" | "projectName" | "parentTaskTitle" | "plannedEnd" | "finalized" | "todayDailyProgress" | "todayProgressNote" | "latestDelayReason"> & {
   plannedEnd: string;
 };
 export type AppSettings = {
@@ -59,6 +62,9 @@ type WbsTaskRow = {
   planned_start: string; planned_end: string; business_days: number;
   actual_start: string | null; actual_end: string | null;
   finalized: number;
+  today_daily_progress: number | null;
+  today_progress_note: string | null;
+  latest_delay_reason: string | null;
 };
 type WorkHistoryRow = { id: number; task_id: number; event_type: WorkHistoryType; reason: string; details: string; occurred_at: string };
 type AssigneeRow = {
@@ -77,20 +83,26 @@ function database() {
   return databasePromise;
 }
 
-export async function listWbsTasks(): Promise<WbsTask[]> {
+export async function listWbsTasks(date = localISODate()): Promise<WbsTask[]> {
   const db = await database();
   const rows = await db.select<WbsTaskRow[]>(`
     SELECT w.id, w.title, w.description, w.project_id, p.name AS project_name,
       w.parent_task_id, parent.title AS parent_task_title,
       w.assignee_id, a.name AS assignee_name,
       w.status, w.progress, w.country_code, w.planned_start, w.planned_end,
-      w.business_days, w.actual_start, w.actual_end, w.finalized
+      w.business_days, w.actual_start, w.actual_end, w.finalized,
+      today_log.daily_progress AS today_daily_progress,
+      today_log.note AS today_progress_note,
+      (SELECT history.reason FROM wbs_work_history history
+        WHERE history.task_id=w.id AND history.event_type='delay'
+        ORDER BY history.occurred_at DESC, history.id DESC LIMIT 1) AS latest_delay_reason
     FROM wbs_tasks w
     LEFT JOIN assignees a ON a.id = w.assignee_id
     LEFT JOIN projects p ON p.id = w.project_id
     LEFT JOIN wbs_tasks parent ON parent.id = w.parent_task_id
+    LEFT JOIN wbs_progress_logs today_log ON today_log.task_id=w.id AND today_log.log_date=$1
     ORDER BY w.planned_start, w.id
-  `);
+  `, [date]);
   return rows.map(mapTask);
 }
 
@@ -155,14 +167,16 @@ export async function saveScheduleChanges(changes: Array<{ taskId: number; plann
 export async function saveDailyProgress(taskId: number, date: string, dailyProgress: number, note: string, delayReason: string) {
   if (!Number.isFinite(dailyProgress) || dailyProgress < 0 || dailyProgress > 100) throw new Error("今日進んだ進捗は0〜100%で入力してください。");
   const db = await database();
-  const rows = await db.select<Array<{ progress: number; finalized: number; planned_start: string; planned_end: string; business_days: number; country_code: string; previous_daily: number }>>(
+  const rows = await db.select<Array<{ progress: number; finalized: number; planned_start: string; planned_end: string; business_days: number; country_code: string; previous_daily: number; child_count: number }>>(
     `SELECT w.progress, w.finalized, w.planned_start, w.planned_end, w.business_days, w.country_code,
-      COALESCE((SELECT daily_progress FROM wbs_progress_logs WHERE task_id=w.id AND log_date=$2), 0) AS previous_daily
+      COALESCE((SELECT daily_progress FROM wbs_progress_logs WHERE task_id=w.id AND log_date=$2), 0) AS previous_daily,
+      (SELECT COUNT(*) FROM wbs_tasks child WHERE child.parent_task_id=w.id) AS child_count
       FROM wbs_tasks w WHERE w.id=$1`,
     [taskId, date],
   );
   const task = rows[0];
   if (!task) throw new Error("進捗を記録するタスクが見つかりません。");
+  if (task.child_count > 0) throw new Error("サブタスクを持つタスクには進捗を直接入力できません。");
   const totalProgress = Math.max(0, Math.min(100, task.progress - task.previous_daily + dailyProgress));
   const expected = expectedProgress({ plannedStart: task.planned_start, plannedEnd: task.planned_end, businessDays: task.business_days, countryCode: task.country_code }, date);
   const normalizedReason = delayReason.trim();
@@ -257,7 +271,16 @@ function mapTask(row: WbsTaskRow): WbsTask {
     progress: row.progress, countryCode: row.country_code, plannedStart: row.planned_start,
     plannedEnd: row.planned_end, businessDays: row.business_days,
     actualStart: row.actual_start, actualEnd: row.actual_end, finalized: row.finalized === 1,
+    todayDailyProgress: row.today_daily_progress,
+    todayProgressNote: row.today_progress_note ?? "",
+    latestDelayReason: row.latest_delay_reason ?? "",
   };
+}
+
+function localISODate() {
+  const now = new Date();
+  const offset = now.getTimezoneOffset() * 60_000;
+  return new Date(now.getTime() - offset).toISOString().slice(0, 10);
 }
 
 function taskValues(input: WbsTaskInput): unknown[] {

@@ -6,7 +6,8 @@ import {
 import type { Project } from "../../lib/projects";
 import { milestoneColorTokens, type Milestone } from "../../lib/milestones";
 import type { Assignee, WbsTask } from "../../lib/wbs";
-import { buildTimelineDateRange, buildTimelineMonths, buildWbsGroups, flattenWbsTaskTree, type WbsGroupBy } from "../../lib/wbsView";
+import { expectedProgress, progressHealth } from "../../lib/wbsPlanning";
+import { buildTimelineDateRange, buildTimelineMonths, buildWbsGroups, dailyProgressActionLabel, flattenWbsTaskTree, type WbsGroupBy } from "../../lib/wbsView";
 
 const DAY_WIDTH = 42;
 
@@ -23,8 +24,9 @@ type DragSession = {
 };
 type ContextMenuState = { task: WbsTask; x: number; y: number };
 
-export function TimelineBoard({ tasks, milestones, assignees, projects, groupBy, countryCode, selectedId, onSelect, onCreateSubtask, onShowHistory, onRecordProgress, onSelectMilestone, onScheduleChange }: {
+export function TimelineBoard({ tasks, allTasks = tasks, milestones, assignees, projects, groupBy, countryCode, selectedId, onSelect, onCreateSubtask, onShowHistory, onRecordProgress, onSelectMilestone, onScheduleChange }: {
   tasks: WbsTask[];
+  allTasks?: WbsTask[];
   milestones: Milestone[];
   assignees: Assignee[];
   projects: Project[];
@@ -253,17 +255,20 @@ export function TimelineBoard({ tasks, milestones, assignees, projects, groupBy,
             const left = dayDifference(range.start, task.plannedStart) * DAY_WIDTH;
             const width = Math.max(DAY_WIDTH, (dayDifference(task.plannedStart, task.plannedEnd) + 1) * DAY_WIDTH);
             const selected = selectedId === task.id;
-            return <div className={`roadmap-row ${selected ? "selected" : ""}`} key={task.id} onContextMenu={(event) => openContextMenu(event, task)} onKeyDown={(event) => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) openContextMenu(event, task); }}>
+            const hasChildren = allTasks.some((candidate) => candidate.parentTaskId === task.id);
+            const plannedProgress = expectedProgress(task, today);
+            const health = progressHealth(task, today);
+            return <div className={`roadmap-row ${selected ? "selected" : ""} ${hasChildren ? "parent-task" : ""}`} key={task.id} onContextMenu={(event) => openContextMenu(event, task)} onKeyDown={(event) => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) openContextMenu(event, task); }}>
               <button className="task-info" style={{ "--task-depth": depth } as React.CSSProperties} aria-pressed={selected} onClick={() => onSelect(task)}>
                 <span className="task-title-line"><strong>{depth > 0 && <span className="task-branch" aria-hidden="true">↳</span>}{task.title}</strong>{selected && <span className="task-selection-badge">選択中</span>}</span>
                 <small>{task.finalized ? "確定" : "編集中"} · {task.parentTaskTitle ? `親: ${task.parentTaskTitle} · ` : ""}{task.assigneeName ?? "責任者未設定"}</small>
               </button>
               <span className={`status-cell ${task.status}`}>{statusLabel(task.status)}</span>
-              <span className="progress-cell">{task.progress}%</span>
+              <span className={`progress-cell ${health}`} title={`実績 ${task.progress}% / 今日の予定 ${plannedProgress}%`}><strong>{task.progress}%</strong><small>予定 {plannedProgress}%</small></span>
               <div className="timeline-cells" style={{ backgroundImage: timelineBackground }}>
-                <div className={`timeline-bar ${task.status}`} style={{ left, width }}>
+                <div className={`timeline-bar ${task.status} ${health} ${hasChildren ? "has-children" : ""}`} style={{ left, width }}>
                   <button className="resize-handle left" aria-label={`${task.title}の営業日数を1日減らす。ドラッグで開始側を調整`} onPointerDown={(event) => begin(event, task, "left")} onClick={() => void clickDuration(task, -1)} onKeyDown={(event) => void keyboardAdjust(event, task, "left")}>−</button>
-                  <button className="bar-body" title="ドラッグで開始日を移動" onPointerDown={(event) => begin(event, task, "move")} onKeyDown={(event) => void keyboardAdjust(event, task, "move")}><i style={{ width: `${task.progress}%` }} /><span>{task.title}</span></button>
+                  <button className="bar-body" title={`実績 ${task.progress}% / 今日の予定 ${plannedProgress}%（点線）`} onPointerDown={(event) => begin(event, task, "move")} onKeyDown={(event) => void keyboardAdjust(event, task, "move")}><i className="actual-progress" style={{ width: `${task.progress}%` }} /><i className="planned-progress" style={{ left: `${plannedProgress}%` }} /><span>{task.title} · {task.progress}%</span></button>
                   <button className="resize-handle right" aria-label={`${task.title}の営業日数を1日増やす。ドラッグで終了側を調整`} onPointerDown={(event) => begin(event, task, "right")} onClick={() => void clickDuration(task, 1)} onKeyDown={(event) => void keyboardAdjust(event, task, "right")}>＋</button>
                 </div>
               </div>
@@ -274,7 +279,7 @@ export function TimelineBoard({ tasks, milestones, assignees, projects, groupBy,
     </div>
     <div className="roadmap-help"><strong>横にスクロールして期間を確認</strong><span>中央をドラッグ：開始日を移動</span><span>左右端をドラッグ：営業日数を変更</span><span>← → キーでも調整可能</span></div>
     {contextMenu && <div className="task-context-menu" ref={contextMenuRef} role="menu" aria-label={`${contextMenu.task.title}の操作`} style={{ left: contextMenu.x, top: contextMenu.y }}>
-      <button role="menuitem" onClick={() => { const task = contextMenu.task; setContextMenu(null); onRecordProgress(task); }}>今日進んだ進捗を入力</button>
+      {dailyProgressActionLabel(contextMenu.task, allTasks.some((candidate) => candidate.parentTaskId === contextMenu.task.id)) && <button role="menuitem" onClick={() => { const task = contextMenu.task; setContextMenu(null); onRecordProgress(task); }}>{dailyProgressActionLabel(contextMenu.task, false)}</button>}
       <button role="menuitem" onClick={() => { const task = contextMenu.task; setContextMenu(null); onShowHistory(task); }}>作業経緯を表示</button>
       <button role="menuitem" onClick={() => { const task = contextMenu.task; setContextMenu(null); onCreateSubtask(task); }}>＋ サブタスクを追加</button>
     </div>}

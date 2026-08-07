@@ -1,6 +1,6 @@
 import type { Project } from "../../lib/projects";
 import type { Assignee, WbsTask } from "../../lib/wbs";
-import { summarizeWbsTasks } from "../../lib/wbsView";
+import { ancestorTrail, summarizeWbsTasks } from "../../lib/wbsView";
 import { formatISODate } from "../../lib/calendar";
 import { expectedProgress, isTaskDelayed } from "../../lib/wbsPlanning";
 
@@ -17,7 +17,7 @@ export function HomeScreen({ tasks, projects, users, loading, onNavigate, onOpen
   const summary = summarizeWbsTasks(tasks, formatISODate(new Date()));
   const today = formatISODate(new Date());
   const attention = tasks
-    .filter((task) => task.status !== "completed" && (isTaskDelayed(task, today) || task.plannedEnd < today || task.projectId === null || task.assigneeId === null))
+    .filter((task) => task.status !== "completed" && isTaskDelayed(task, today))
     .sort((left, right) => left.plannedEnd.localeCompare(right.plannedEnd))
     .slice(0, 5);
 
@@ -36,7 +36,15 @@ export function HomeScreen({ tasks, projects, users, loading, onNavigate, onOpen
       <div className="home-content">
         <section className="home-panel attention-panel">
           <div className="home-panel-title"><div><p className="eyebrow">NEEDS ATTENTION</p><h2>確認が必要なWBS</h2></div><button onClick={() => onNavigate("wbs")}>すべて表示</button></div>
-          {attention.length === 0 ? <div className="home-empty"><strong>現在、要確認のWBSはありません</strong><span>進捗遅延、期限超過、紐づけ未設定のWBSがここに表示されます。</span></div> : <div className="attention-list">{attention.map((task) => { const delayed = isTaskDelayed(task, today); return <button key={task.id} onClick={() => onOpenTask(task)}><span className="attention-state">{delayed ? "進捗遅延" : task.plannedEnd < today ? "期限超過" : "紐づけ未設定"}</span><span><strong>{task.title}</strong><small>{delayed ? `実績 ${task.progress}% / 計画 ${expectedProgress(task, today)}%` : `${task.projectName ?? "案件未設定"} · ${task.assigneeName ?? "責任者未設定"}`}</small></span><time>{task.plannedEnd}</time></button>; })}</div>}
+          {attention.length === 0 ? <div className="home-empty"><strong>現在、遅れているWBSはありません</strong><span>今日の計画進捗を下回った確定済みWBSがここに表示されます。</span></div> : <div className="attention-list">{attention.map((task) => {
+            const ancestors = ancestorTrail(tasks, task.id);
+            const fullPath = [...ancestors.map((ancestor) => ancestor.title), task.title].join(" › ");
+            return <button key={task.id} onClick={() => onOpenTask(task)} title={fullPath} aria-label={`${fullPath}を開く`}>
+              <span className="attention-state">進捗遅延</span>
+              <span><strong>{task.title}</strong>{ancestors.length > 0 && <small className="task-parent-path">親: {ancestors[ancestors.length - 1].title}<span className="ancestry-tooltip" role="tooltip">{fullPath}</span></small>}<small>実績 {task.progress}% / 計画 {expectedProgress(task, today)}%</small>{task.latestDelayReason && <small className="latest-delay-reason">最新の遅延理由: {task.latestDelayReason}</small>}</span>
+              <time>{task.plannedEnd}</time>
+            </button>;
+          })}</div>}
         </section>
         <section className="home-panel start-panel">
           <div><p className="eyebrow">QUICK START</p><h2>作業を始める</h2></div>

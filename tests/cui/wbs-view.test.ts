@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildTimelineDateRange, buildTimelineMonths, buildWbsGroups, filterWbsTasks, flattenWbsTaskTree, parentTaskCandidates, summarizeWbsTasks, type WbsFilters } from "../../src/lib/wbsView";
+import { ancestorTrail, buildTimelineDateRange, buildTimelineMonths, buildWbsGroups, dailyProgressActionLabel, filterWbsTasks, flattenWbsTaskTree, parentTaskCandidates, summarizeWbsTasks, type WbsFilters } from "../../src/lib/wbsView";
 import type { Milestone } from "../../src/lib/milestones";
 import type { Project } from "../../src/lib/projects";
 import type { Assignee, WbsTask } from "../../src/lib/wbs";
@@ -41,6 +41,13 @@ describe("WBS view methods", () => {
     expect(flattenWbsTaskTree(nested).map(({ task, depth }) => [task.id, depth])).toEqual([[1, 0], [2, 1], [4, 2]]);
     expect(parentTaskCandidates(nested, 10, 2).map((task) => task.id)).toEqual([1]);
     expect(parentTaskCandidates(nested, null, null)).toEqual([]);
+    expect(ancestorTrail(nested, 4).map((task) => task.title)).toEqual(["要件レビュー", "UI実装"]);
+  });
+
+  it("switches the daily progress action by today's record and hides it for parents", () => {
+    expect(dailyProgressActionLabel({}, false)).toBe("今日進んだ進捗を入力");
+    expect(dailyProgressActionLabel({ todayDailyProgress: 0 }, false)).toBe("今日の進捗を編集");
+    expect(dailyProgressActionLabel({ todayDailyProgress: 10 }, true)).toBeNull();
   });
 
   it("builds a horizontally scrollable range that includes tasks, milestones, and padding", () => {

@@ -17,7 +17,7 @@ import { HomeScreen } from "./features/home/HomeScreen";
 import { listProjects, type Project } from "./lib/projects";
 import { createMilestone, deleteMilestone, listMilestones, MILESTONE_COLOR_OPTIONS, updateMilestone, type Milestone, type MilestoneInput } from "./lib/milestones";
 import { MilestonePanel } from "./features/wbs/MilestonePanel";
-import { filterWbsTasks, parentTaskCandidates, summarizeWbsTasks, type WbsFilters, type WbsFilterValue, type WbsGroupBy } from "./lib/wbsView";
+import { dailyProgressActionLabel, filterWbsTasks, parentTaskCandidates, summarizeWbsTasks, type WbsFilters, type WbsFilterValue, type WbsGroupBy } from "./lib/wbsView";
 import "./App.css";
 
 type View = "home" | "wbs" | "projects" | "users" | "settings";
@@ -33,6 +33,7 @@ const emptySettings: AppSettings = {
 };
 
 function App() {
+  const [currentDate, setCurrentDate] = useState(() => formatISODate(new Date()));
   const [view, setView] = useState<View>("home");
   const [tasks, setTasks] = useState<WbsTask[]>([]);
   const [assignees, setAssignees] = useState<Assignee[]>([]);
@@ -56,7 +57,7 @@ function App() {
   const refresh = useCallback(async () => {
     try {
       const [nextTasks, nextAssignees, nextProjects, nextMilestones, nextSettings] = await Promise.all([
-        listWbsTasks(), listAssignees(), listProjects(), listMilestones(), getSettings(),
+        listWbsTasks(currentDate), listAssignees(), listProjects(), listMilestones(), getSettings(),
       ]);
       setTasks(nextTasks);
       setAssignees(nextAssignees);
@@ -70,9 +71,15 @@ function App() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [currentDate]);
 
   useEffect(() => { void refresh(); }, [refresh]);
+
+  useEffect(() => {
+    const updateDate = () => setCurrentDate(formatISODate(new Date()));
+    const timer = window.setInterval(updateDate, 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     async function notifyIfDue() {
@@ -235,7 +242,7 @@ function App() {
             </section>
           </>}
 
-          {loading ? <div className="loading-card">WBSを読み込んでいます…</div> : roadmapTasks.length === 0 && roadmapMilestones.length === 0 ? <section className="wbs-empty"><span>▦</span><h2>{roadmapMode === "all" ? "最初のWBSを追加しましょう" : "このプロジェクトの最初のタスクを追加しましょう"}</h2><p>責任者と日程を紐づけると、ロードマップ上で予定と進捗をまとめて確認できます。</p><button className="primary-button" onClick={() => openTaskCreate()}>＋ ロードマップにタスクを追加</button></section> : visibleTasks.length === 0 && roadmapTasks.length > 0 ? <section className="wbs-empty filtered"><span>⌕</span><h2>条件に一致するWBSがありません</h2><p>検索語または絞り込み条件を変更してください。</p>{hasActiveFilters && <button className="quiet-button" onClick={() => setFilters({ query: "", projectId: roadmapMode === "all" ? "all" : selectedRoadmapProjectId ?? "all", assigneeId: "all", status: "all" })}>絞り込みを解除</button>}</section> : <TimelineBoard tasks={visibleTasks} milestones={roadmapMilestones.filter((milestone) => filters.projectId === "all" || milestone.projectId === filters.projectId)} assignees={assignees} projects={projects} groupBy={groupBy} countryCode={settings.countryCode} selectedId={selectedId} onSelect={(task) => setSelectedId(task.id)} onCreateSubtask={(task) => openTaskCreate(task.id)} onShowHistory={setHistoryTask} onRecordProgress={setProgressTask} onSelectMilestone={setMilestoneEditor} onScheduleChange={updateSchedule} />}
+          {loading ? <div className="loading-card">WBSを読み込んでいます…</div> : roadmapTasks.length === 0 && roadmapMilestones.length === 0 ? <section className="wbs-empty"><span>▦</span><h2>{roadmapMode === "all" ? "最初のWBSを追加しましょう" : "このプロジェクトの最初のタスクを追加しましょう"}</h2><p>責任者と日程を紐づけると、ロードマップ上で予定と進捗をまとめて確認できます。</p><button className="primary-button" onClick={() => openTaskCreate()}>＋ ロードマップにタスクを追加</button></section> : visibleTasks.length === 0 && roadmapTasks.length > 0 ? <section className="wbs-empty filtered"><span>⌕</span><h2>条件に一致するWBSがありません</h2><p>検索語または絞り込み条件を変更してください。</p>{hasActiveFilters && <button className="quiet-button" onClick={() => setFilters({ query: "", projectId: roadmapMode === "all" ? "all" : selectedRoadmapProjectId ?? "all", assigneeId: "all", status: "all" })}>絞り込みを解除</button>}</section> : <TimelineBoard tasks={visibleTasks} allTasks={roadmapTasks} milestones={roadmapMilestones.filter((milestone) => filters.projectId === "all" || milestone.projectId === filters.projectId)} assignees={assignees} projects={projects} groupBy={groupBy} countryCode={settings.countryCode} selectedId={selectedId} onSelect={(task) => setSelectedId(task.id)} onCreateSubtask={(task) => openTaskCreate(task.id)} onShowHistory={setHistoryTask} onRecordProgress={setProgressTask} onSelectMilestone={setMilestoneEditor} onScheduleChange={updateSchedule} />}
           {selectedTask && <aside className="task-drawer" aria-label="タスク詳細"><button className="drawer-close" aria-label="詳細を閉じる" onClick={() => setSelectedId(null)}>×</button><TaskEditor task={selectedTask} tasks={roadmapTasks} countryCode={settings.countryCode} projects={projects} assignees={assignees} onChanged={refresh} onCreateChild={() => openTaskCreate(selectedTask.id)} onProgress={() => setProgressTask(selectedTask)} onDelete={() => void removeTask(selectedTask)} onError={setError} /></aside>}
         </main>
       )}
@@ -340,6 +347,7 @@ function TaskEditor({ task, tasks, countryCode, projects, assignees, onChanged, 
   useEffect(() => setForm({ ...task, countryCode }), [task, countryCode]);
   const businessDays = businessDaysOrDefault(form.businessDays);
   const end = calculateEndDate(form.plannedStart, businessDays, countryCode);
+  const hasChildren = tasks.some((candidate) => candidate.parentTaskId === task.id);
 
   async function submit(event: FormEvent) {
     event.preventDefault(); setSaving(true);
@@ -357,9 +365,9 @@ function TaskEditor({ task, tasks, countryCode, projects, assignees, onChanged, 
     <div className="panel-title"><div><p className="eyebrow">DETAIL</p><h2>タスクを編集</h2></div><span className={`status-badge ${form.status}`}>{statusLabels[form.status]}</span></div>
     <div className={`task-lock-state ${task.finalized ? "finalized" : "draft"}`}><div><strong>{task.finalized ? "計画確定済み" : "編集中"}</strong><span>{task.finalized ? "日程変更にはロードマップ上で理由の記録が必要です。" : "確定するまで日程を自由に調整できます。"}</span></div>{!task.finalized && <button type="button" className="quiet-button" disabled={saving} onClick={() => void finalize()}>タスクの状態を確定</button>}</div>
     <FormFields form={form} setForm={setForm} projects={projects} assignees={assignees} tasks={tasks} currentTaskId={task.id} includeActual scheduleLocked={task.finalized} />
-    <div className="progress-block"><div><span>進捗率</span><strong>{form.progress}%</strong></div><input aria-label="進捗率" type="range" min="0" max="100" step="5" disabled={task.finalized} value={form.progress} onChange={(e) => setForm({ ...form, progress: Number(e.currentTarget.value) })} />{task.finalized && <small>確定後は「今日の進捗」から記録します。</small>}</div>
+    <div className="progress-block"><div><span>進捗率</span><strong>{form.progress}%</strong></div>{hasChildren ? <small>サブタスクを持つため、このタスクには進捗を直接入力できません。</small> : <><input aria-label="進捗率" type="range" min="0" max="100" step="5" disabled={task.finalized} value={form.progress} onChange={(e) => setForm({ ...form, progress: Number(e.currentTarget.value) })} />{task.finalized && <small>確定後は「今日の進捗」から記録します。</small>}</>}</div>
     <button type="button" className="child-task-button" onClick={onCreateChild}>＋ ロードマップ上でサブタスクを追加</button>
-    <div className="editor-actions"><button type="button" className="quiet-button" onClick={onProgress}>今日の進捗</button><button className="primary-button" disabled={saving}>{saving ? "保存中…" : "変更を保存"}</button></div>
+    <div className="editor-actions">{dailyProgressActionLabel(task, hasChildren) && <button type="button" className="quiet-button" onClick={onProgress}>{dailyProgressActionLabel(task, false)}</button>}<button className="primary-button" disabled={saving}>{saving ? "保存中…" : "変更を保存"}</button></div>
     <button type="button" className="danger-button" onClick={onDelete}>このタスクを削除</button>
   </form>;
 }
@@ -390,15 +398,17 @@ function FormFields({ form, setForm, projects, assignees, tasks, currentTaskId, 
 }
 
 function ProgressModal({ task, onClose, onSaved, onError }: { task: WbsTask; onClose: () => void; onSaved: () => Promise<void>; onError: (value: string | null) => void }) {
-  const [progress, setProgress] = useState<number | "">("");
+  const previousDaily = task.todayDailyProgress ?? 0;
+  const baseProgress = task.progress - previousDaily;
+  const [progress, setProgress] = useState<number | "">(task.todayDailyProgress ?? "");
   const [progressError, setProgressError] = useState<string | null>(null);
-  const [note, setNote] = useState("");
+  const [note, setNote] = useState(task.todayProgressNote ?? "");
   const [delayReason, setDelayReason] = useState("");
   const [saving, setSaving] = useState(false);
   const today = formatISODate(new Date());
   const expected = expectedProgress(task, today);
   const progressValue = progress === "" ? 0 : progress;
-  const total = Math.min(100, task.progress + progressValue);
+  const total = Math.min(100, baseProgress + progressValue);
   const delayed = progress !== "" && task.finalized && total < expected;
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -414,15 +424,16 @@ function ProgressModal({ task, onClose, onSaved, onError }: { task: WbsTask; onC
     try { await saveDailyProgress(task.id, today, dailyProgress, note, delayReason); await onSaved(); }
     catch (cause) { onError(toMessage(cause)); setSaving(false); }
   }
-  return <Modal title="今日の進捗を記録" onClose={onClose}>
+  const editing = task.todayDailyProgress != null;
+  return <Modal title={editing ? "今日の進捗を編集" : "今日の進捗を記録"} onClose={onClose}>
     <form className="modal-form" onSubmit={submit}>
       <p className="modal-lead">{task.title}</p>
       <div className="progress-comparison"><div><span>今日進んだ進捗</span><strong>+{progressValue}%</strong></div><div><span>入力後の累計</span><strong>{total}%</strong></div><div className={delayed ? "delayed" : ""}><span>今日時点の計画</span><strong>{expected}%</strong></div></div>
-      <label>今日進んだ進捗（%）<input aria-label="今日進んだ進捗" aria-describedby={progressError ? "daily-progress-error" : undefined} aria-invalid={progressError ? "true" : undefined} type="number" min="0" max={100 - task.progress} placeholder="0" value={progress} onChange={(e) => { setProgressError(null); setProgress(e.currentTarget.value === "" ? "" : Math.max(0, Math.min(100 - task.progress, Number(e.currentTarget.value)))); }} /></label>
+      <label>今日進んだ進捗（%）<input aria-label="今日進んだ進捗" aria-describedby={progressError ? "daily-progress-error" : undefined} aria-invalid={progressError ? "true" : undefined} type="number" min="0" max={100 - baseProgress} placeholder="0" value={progress} onChange={(e) => { setProgressError(null); setProgress(e.currentTarget.value === "" ? "" : Math.max(0, Math.min(100 - baseProgress, Number(e.currentTarget.value)))); }} /></label>
       {progressError && <div id="daily-progress-error" className="error" role="alert"><span>{progressError}</span></div>}
       <label>今日のメモ<textarea rows={4} maxLength={500} value={note} onChange={(e) => setNote(e.currentTarget.value)} placeholder="進んだこと、困っていること" /></label>
       {delayed && <label className="delay-reason">計画を下回る理由<span>必須</span><textarea required rows={3} maxLength={1000} value={delayReason} onChange={(e) => setDelayReason(e.currentTarget.value)} placeholder="遅延の要因と対応方針を記載してください" /></label>}
-      <div className="modal-actions"><button type="button" className="quiet-button" onClick={onClose}>キャンセル</button><button className="primary-button" disabled={saving || (delayed && !delayReason.trim())}>{saving ? "保存中…" : "記録する"}</button></div>
+      <div className="modal-actions"><button type="button" className="quiet-button" onClick={onClose}>キャンセル</button><button className="primary-button" disabled={saving || (delayed && !delayReason.trim())}>{saving ? "保存中…" : editing ? "更新する" : "記録する"}</button></div>
     </form>
   </Modal>;
 }

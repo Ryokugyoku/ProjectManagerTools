@@ -26,6 +26,16 @@ export function isTaskDelayed(task: Pick<WbsTask, "finalized" | "status" | "prog
   return task.finalized && task.status !== "completed" && task.progress < expectedProgress(task, date);
 }
 
+export type ProgressHealth = "untracked" | "ahead" | "on-track" | "behind";
+
+export function progressHealth(task: Pick<WbsTask, "finalized" | "progress" | "plannedStart" | "plannedEnd" | "businessDays" | "countryCode">, date: string): ProgressHealth {
+  if (!task.finalized) return "untracked";
+  const planned = expectedProgress(task, date);
+  if (task.progress > planned) return "ahead";
+  if (task.progress < planned) return "behind";
+  return "on-track";
+}
+
 export function buildScheduleCascade(tasks: WbsTask[], taskId: number, schedule: TaskSchedule): ScheduleChange[] {
   const byId = new Map(tasks.map((task) => [task.id, task]));
   const target = byId.get(taskId);

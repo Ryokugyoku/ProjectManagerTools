@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import { TimelineBoard } from "../../src/features/wbs/TimelineBoard";
+import { HomeScreen } from "../../src/features/home/HomeScreen";
 import type { WbsTask } from "../../src/lib/wbs";
 
 const task: WbsTask = {
@@ -68,5 +69,29 @@ describe("WBSロードマップの選択表示", () => {
     expect(dayColumns).toHaveLength(42);
     expect(markup).toContain("repeating-linear-gradient");
     expect(markup).toContain('class="timeline-cells"');
+    expect(markup).toContain('class="planned-progress"');
+    expect(markup).toContain("予定 0%");
+  });
+
+  it("子を持つタスクを専用色の親タスク行として示す", () => {
+    const child = { ...task, id: 2, title: "子", parentTaskId: 1, parentTaskTitle: task.title };
+    const markup = renderToStaticMarkup(<TimelineBoard {...{
+      tasks: [task], allTasks: [task, child], milestones: [], assignees: [], projects: [], groupBy: "project" as const,
+      countryCode: "JP", selectedId: null, onSelect: vi.fn(), onCreateSubtask: vi.fn(), onShowHistory: vi.fn(),
+      onRecordProgress: vi.fn(), onSelectMilestone: vi.fn(), onScheduleChange: vi.fn(),
+    }} />);
+    expect(markup).toContain('roadmap-row  parent-task');
+    expect(markup).toContain('timeline-bar in_progress untracked has-children');
+  });
+});
+
+describe("ホームの遅延表示", () => {
+  it("遅延タスクに親階層と最新の遅延理由を表示する", () => {
+    const parent = { ...task, id: 10, title: "親", finalized: true, plannedStart: "2026-01-01", plannedEnd: "2026-12-31" };
+    const delayed = { ...task, id: 11, title: "遅延中", parentTaskId: 10, parentTaskTitle: "親", finalized: true, progress: 1, plannedStart: "2026-01-01", plannedEnd: "2026-12-31", latestDelayReason: "仕様回答待ち" };
+    const markup = renderToStaticMarkup(<HomeScreen tasks={[parent, delayed]} projects={[]} users={[]} loading={false} onNavigate={vi.fn()} onOpenTask={vi.fn()} />);
+    expect(markup).toContain("親: 親");
+    expect(markup).toContain("親 › 遅延中");
+    expect(markup).toContain("最新の遅延理由: 仕様回答待ち");
   });
 });

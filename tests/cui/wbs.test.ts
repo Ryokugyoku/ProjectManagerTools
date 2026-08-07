@@ -24,8 +24,15 @@ beforeEach(() => { db.select.mockReset(); db.execute.mockReset(); db.execute.moc
 
 describe("WBS data methods", () => {
   it("maps WBS rows including project and assignee", async () => {
-    db.select.mockResolvedValue([{ id: 1, title: "設計", description: "", project_id: 2, project_name: "案件", parent_task_id: 5, parent_task_title: "要件定義", assignee_id: 3, assignee_name: "山田", status: "in_progress", progress: 40, country_code: "JP", planned_start: "2026-08-06", planned_end: "2026-08-13", business_days: 5, actual_start: "2026-08-06", actual_end: null, finalized: 1 }]);
-    expect(await listWbsTasks()).toEqual([{ id: 1, title: "設計", description: "", projectId: 2, projectName: "案件", parentTaskId: 5, parentTaskTitle: "要件定義", assigneeId: 3, assigneeName: "山田", status: "in_progress", progress: 40, countryCode: "JP", plannedStart: "2026-08-06", plannedEnd: "2026-08-13", businessDays: 5, actualStart: "2026-08-06", actualEnd: null, finalized: true }]);
+    db.select.mockResolvedValue([{ id: 1, title: "設計", description: "", project_id: 2, project_name: "案件", parent_task_id: 5, parent_task_title: "要件定義", assignee_id: 3, assignee_name: "山田", status: "in_progress", progress: 40, country_code: "JP", planned_start: "2026-08-06", planned_end: "2026-08-13", business_days: 5, actual_start: "2026-08-06", actual_end: null, finalized: 1, today_daily_progress: 10, today_progress_note: "確認済み", latest_delay_reason: "レビュー待ち" }]);
+    expect(await listWbsTasks("2026-08-07")).toEqual([{ id: 1, title: "設計", description: "", projectId: 2, projectName: "案件", parentTaskId: 5, parentTaskTitle: "要件定義", assigneeId: 3, assigneeName: "山田", status: "in_progress", progress: 40, countryCode: "JP", plannedStart: "2026-08-06", plannedEnd: "2026-08-13", businessDays: 5, actualStart: "2026-08-06", actualEnd: null, finalized: true, todayDailyProgress: 10, todayProgressNote: "確認済み", latestDelayReason: "レビュー待ち" }]);
+    expect(db.select).toHaveBeenCalledWith(expect.stringContaining("today_log.log_date=$1"), ["2026-08-07"]);
+  });
+
+  it("uses the current local date when loading today's progress by default", async () => {
+    db.select.mockResolvedValue([]);
+    await listWbsTasks();
+    expect(db.select.mock.calls[0][1][0]).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 
   it("creates an unassigned WBS and trims text", async () => {
@@ -84,14 +91,20 @@ describe("WBS data methods", () => {
   });
 
   it("upserts daily progress and updates the WBS", async () => {
-    db.select.mockResolvedValue([{ progress: 40, previous_daily: 0, finalized: 1, planned_start: "2026-08-03", planned_end: "2026-08-14", business_days: 10, country_code: "JP" }]);
+    db.select.mockResolvedValue([{ progress: 40, previous_daily: 0, finalized: 1, planned_start: "2026-08-03", planned_end: "2026-08-14", business_days: 10, country_code: "JP", child_count: 0 }]);
     await saveDailyProgress(7, "2026-08-07", 20, " 進捗 ", "");
     expect(db.execute).toHaveBeenNthCalledWith(1, expect.stringContaining("wbs_progress_logs"), [7, "2026-08-07", 60, "進捗", 20]);
     expect(db.execute).toHaveBeenCalledTimes(3);
   });
 
+  it("rejects daily progress for a task that owns subtasks", async () => {
+    db.select.mockResolvedValue([{ progress: 40, previous_daily: 0, finalized: 1, planned_start: "2026-08-03", planned_end: "2026-08-14", business_days: 10, country_code: "JP", child_count: 2 }]);
+    await expect(saveDailyProgress(7, "2026-08-07", 10, "", "")).rejects.toThrow("サブタスクを持つ");
+    expect(db.execute).not.toHaveBeenCalled();
+  });
+
   it("requires and records a delay reason when cumulative progress is below plan", async () => {
-    const stored = { progress: 20, previous_daily: 0, finalized: 1, planned_start: "2026-08-03", planned_end: "2026-08-14", business_days: 10, country_code: "JP" };
+    const stored = { progress: 20, previous_daily: 0, finalized: 1, planned_start: "2026-08-03", planned_end: "2026-08-14", business_days: 10, country_code: "JP", child_count: 0 };
     db.select.mockResolvedValue([stored]);
     await expect(saveDailyProgress(7, "2026-08-07", 5, "", "")).rejects.toThrow("理由");
     await saveDailyProgress(7, "2026-08-07", 5, "確認中", "仕様確認待ち");
@@ -100,7 +113,7 @@ describe("WBS data methods", () => {
   });
 
   it("replaces today's increment instead of adding it twice", async () => {
-    db.select.mockResolvedValue([{ progress: 60, previous_daily: 20, finalized: 0, planned_start: "2026-08-03", planned_end: "2026-08-14", business_days: 10, country_code: "JP" }]);
+    db.select.mockResolvedValue([{ progress: 60, previous_daily: 20, finalized: 0, planned_start: "2026-08-03", planned_end: "2026-08-14", business_days: 10, country_code: "JP", child_count: 0 }]);
     await saveDailyProgress(7, "2026-08-07", 10, "訂正", "");
     expect(db.execute).toHaveBeenNthCalledWith(1, expect.stringContaining("wbs_progress_logs"), [7, "2026-08-07", 50, "訂正", 10]);
   });
