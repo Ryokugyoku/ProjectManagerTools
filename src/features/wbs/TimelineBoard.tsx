@@ -178,8 +178,12 @@ export function TimelineBoard({ tasks, milestones, assignees, projects, groupBy,
             const schedule = drag?.task.id === task.id ? drag.preview : task;
             const left = dayDifference(range.start, schedule.plannedStart) * DAY_WIDTH;
             const width = Math.max(DAY_WIDTH, (dayDifference(schedule.plannedStart, schedule.plannedEnd) + 1) * DAY_WIDTH);
-            return <div className={`roadmap-row ${selectedId === task.id ? "selected" : ""}`} key={task.id} onContextMenu={(event) => openContextMenu(event, task)} onKeyDown={(event) => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) openContextMenu(event, task); }}>
-              <button className="task-info" style={{ "--task-depth": depth } as React.CSSProperties} onClick={() => onSelect(task)}><strong>{depth > 0 && <span className="task-branch" aria-hidden="true">↳</span>}{task.title}</strong><small>{task.finalized ? "確定" : "編集中"} · {task.parentTaskTitle ? `親: ${task.parentTaskTitle} · ` : ""}{task.assigneeName ?? "責任者未設定"}</small></button>
+            const selected = selectedId === task.id;
+            return <div className={`roadmap-row ${selected ? "selected" : ""}`} key={task.id} onContextMenu={(event) => openContextMenu(event, task)} onKeyDown={(event) => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) openContextMenu(event, task); }}>
+              <button className="task-info" style={{ "--task-depth": depth } as React.CSSProperties} aria-pressed={selected} onClick={() => onSelect(task)}>
+                <span className="task-title-line"><strong>{depth > 0 && <span className="task-branch" aria-hidden="true">↳</span>}{task.title}</strong>{selected && <span className="task-selection-badge">選択中</span>}</span>
+                <small>{task.finalized ? "確定" : "編集中"} · {task.parentTaskTitle ? `親: ${task.parentTaskTitle} · ` : ""}{task.assigneeName ?? "責任者未設定"}</small>
+              </button>
               <span className={`status-cell ${task.status}`}>{statusLabel(task.status)}</span>
               <span className="progress-cell">{task.progress}%</span>
               <div className="timeline-cells">{dates.map((date) => <DayColumn key={date} date={date} countryCode={countryCode} milestones={milestonesByDate.get(date)} />)}
