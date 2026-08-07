@@ -1,4 +1,6 @@
 import type { Project } from "./projects";
+import { addCalendarDays, parseISODate } from "./calendar";
+import type { Milestone } from "./milestones";
 import type { Assignee, WbsStatus, WbsTask } from "./wbs";
 
 export type WbsGroupBy = "project" | "assignee";
@@ -19,6 +21,26 @@ export type WbsGroup = {
 };
 
 export type WbsTreeItem = { task: WbsTask; depth: number };
+
+export type TimelineDateRange = { start: string; end: string; days: number };
+
+export function buildTimelineDateRange(
+  tasks: WbsTask[],
+  milestones: Milestone[],
+  today: string,
+  minimumDays = 42,
+): TimelineDateRange {
+  const values = [
+    today,
+    ...tasks.flatMap((task) => [task.plannedStart, task.plannedEnd]),
+    ...milestones.map((milestone) => milestone.dueDate),
+  ].filter(Boolean).sort();
+  const start = addCalendarDays(values[0] ?? today, -7);
+  const latest = addCalendarDays(values[values.length - 1] ?? today, 7);
+  const span = Math.round((parseISODate(latest).getTime() - parseISODate(start).getTime()) / 86_400_000) + 1;
+  const days = Math.max(minimumDays, span);
+  return { start, end: addCalendarDays(start, days - 1), days };
+}
 
 export function filterWbsTasks(tasks: WbsTask[], filters: WbsFilters): WbsTask[] {
   const query = filters.query.trim().toLocaleLowerCase("ja-JP");

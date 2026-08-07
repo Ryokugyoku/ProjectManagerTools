@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildWbsGroups, filterWbsTasks, flattenWbsTaskTree, parentTaskCandidates, summarizeWbsTasks, type WbsFilters } from "../../src/lib/wbsView";
+import { buildTimelineDateRange, buildWbsGroups, filterWbsTasks, flattenWbsTaskTree, parentTaskCandidates, summarizeWbsTasks, type WbsFilters } from "../../src/lib/wbsView";
+import type { Milestone } from "../../src/lib/milestones";
 import type { Project } from "../../src/lib/projects";
 import type { Assignee, WbsTask } from "../../src/lib/wbs";
 
@@ -14,6 +15,7 @@ const users: Assignee[] = [
   { id: 21, name: "佐藤", email: "s@example.com", birthday: null, department: "QA", role: "", timezone: "Asia/Tokyo", interests: "", skills: "", workStyle: "", notes: "" },
 ];
 const all: WbsFilters = { query: "", projectId: "all", assigneeId: "all", status: "all" };
+const milestones: Milestone[] = [{ id: 1, projectId: 10, projectName: "新製品", projectCode: "NEW-1", name: "公開", description: "", dueDate: "2026-09-01", completed: false }];
 
 describe("WBS view methods", () => {
   it("filters by searchable text, relationship, status, and unset values", () => {
@@ -39,5 +41,10 @@ describe("WBS view methods", () => {
     expect(flattenWbsTaskTree(nested).map(({ task, depth }) => [task.id, depth])).toEqual([[1, 0], [2, 1], [4, 2]]);
     expect(parentTaskCandidates(nested, 10, 2).map((task) => task.id)).toEqual([1]);
     expect(parentTaskCandidates(nested, null, null)).toEqual([]);
+  });
+
+  it("builds a horizontally scrollable range that includes tasks, milestones, and padding", () => {
+    expect(buildTimelineDateRange(tasks, milestones, "2026-08-06")).toEqual({ start: "2026-06-24", end: "2026-09-08", days: 77 });
+    expect(buildTimelineDateRange([], [], "2026-08-06")).toEqual({ start: "2026-07-30", end: "2026-09-09", days: 42 });
   });
 });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { filterWbsTasks, parentTaskCandidates, type WbsFilters } from "../../src/lib/wbsView";
+import { buildTimelineDateRange, filterWbsTasks, parentTaskCandidates, type WbsFilters } from "../../src/lib/wbsView";
+import type { Milestone } from "../../src/lib/milestones";
 import type { WbsTask } from "../../src/lib/wbs";
 
 // 因子: 案件（全件/指定/未設定）、責任者（全員/指定/未設定）、状態（全て/指定）。
@@ -39,5 +40,23 @@ describe("parent task candidate combinations", () => {
     [null, null, []],
   ] as const)("project=%s current=%s returns valid parents", (projectId, currentTaskId, ids) => {
     expect(parentTaskCandidates(tree, projectId, currentTaskId).map((task) => task.id)).toEqual(ids);
+  });
+});
+
+// 因子: WBS日程（なし/短期/長期）、マイルストーン（なし/期間外）、最小表示日数（既定/指定）。
+// どの組み合わせでも全日程を含み、短い期間は横操作に必要な最小幅を確保する。
+describe("timeline date range combinations", () => {
+  const milestone = { id: 1, projectId: 1, projectName: "案件A", projectCode: "A", name: "公開", description: "", dueDate: "2026-10-01", completed: false } satisfies Milestone;
+
+  it.each([
+    [[], [], 42, "2026-07-30", "2026-09-09"],
+    [[base], [], 42, "2026-07-30", "2026-09-09"],
+    [[{ ...base, plannedStart: "2026-01-01", plannedEnd: "2026-12-31" }], [], 42, "2025-12-25", "2027-01-07"],
+    [[base], [milestone], 60, "2026-07-30", "2026-10-08"],
+  ] as const)("tasks=%s milestones=%s minimum=%s", (rangeTasks, rangeMilestones, minimumDays, start, end) => {
+    const result = buildTimelineDateRange([...rangeTasks], [...rangeMilestones], "2026-08-06", minimumDays);
+    expect(result.start).toBe(start);
+    expect(result.end).toBe(end);
+    expect(result.days).toBeGreaterThanOrEqual(minimumDays);
   });
 });
