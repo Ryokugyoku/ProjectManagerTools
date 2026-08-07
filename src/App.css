@@ -186,9 +186,9 @@ input[type="range"] { height: 5px; padding: 0; accent-color: #79f2a6; }
 .status-cell, .progress-cell { position: sticky; z-index: 2; display: grid; align-items: center; border-right: 1px solid #29302d; background: #121614; font-size: .64rem; }.selected .status-cell, .selected .progress-cell { background: #18231d; }
 .status-cell { left: 220px; padding: 0 10px; color: #9bbca7; }.status-cell.on_hold { color: #d7b978; }.status-cell.completed { color: #7d8681; }
 .progress-cell { left: 320px; color: #91d7aa; text-align: center; }
-.timeline-cells { position: relative; display: grid; grid-template-columns: repeat(var(--timeline-days), 42px); overflow: hidden; }.selected .timeline-cells { background: rgba(121,242,166,.045); }
-.timeline-bar { position: absolute; z-index: 1; top: 8px; display: flex; min-width: 42px; height: 36px; border: 1px solid #4b8b61; border-radius: 6px; background: #244c32; box-shadow: 0 3px 12px rgba(0,0,0,.3); touch-action: none; }
-.timeline-bar.dragging { opacity: .82; box-shadow: 0 0 0 2px #79f2a6, 0 8px 24px rgba(0,0,0,.4); }
+.timeline-cells { position: relative; display: grid; grid-template-columns: repeat(var(--timeline-days), 42px); overflow: hidden; background-color: #121614; }.selected .timeline-cells { background-color: #18231d; background-blend-mode: screen; }
+.timeline-bar { position: absolute; z-index: 1; top: 8px; display: flex; min-width: 42px; height: 36px; border: 1px solid #4b8b61; border-radius: 6px; background: #244c32; box-shadow: 0 3px 12px rgba(0,0,0,.3); touch-action: none; transition: left 70ms linear, width 70ms linear; }
+.timeline-bar.dragging { opacity: .82; box-shadow: 0 0 0 2px #79f2a6, 0 8px 24px rgba(0,0,0,.4); will-change: left, width; }
 .timeline-bar.completed { border-color: #56605b; background: #333a36; }.timeline-bar.on_hold { border-color: #8a713e; background: #544420; }
 .resize-handle { width: 17px; flex: 0 0 auto; border: 0; padding: 0; color: rgba(255,255,255,.7); background: rgba(0,0,0,.14); font-size: .65rem; cursor: ew-resize; }.resize-handle.left { border-radius: 5px 0 0 5px; }.resize-handle.right { border-radius: 0 5px 5px 0; }
 .bar-body { position: relative; min-width: 0; flex: 1; overflow: hidden; border: 0; padding: 0 7px; color: #eafff0; background: transparent; cursor: grab; text-align: left; }.bar-body:active { cursor: grabbing; }.bar-body i { position: absolute; inset: 0 auto 0 0; background: rgba(121,242,166,.17); }.bar-body span { position: relative; display: block; overflow: hidden; font-size: .64rem; text-overflow: ellipsis; white-space: nowrap; }
@@ -196,6 +196,20 @@ input[type="range"] { height: 5px; padding: 0; accent-color: #79f2a6; }
 .roadmap-help { display: flex; flex-wrap: wrap; gap: 18px; padding: 9px 14px; border-top: 1px solid #2a302d; color: #68716d; font-size: .61rem; }.roadmap-help strong { color: #9fc9ad; }
 .task-context-menu { position: fixed; z-index: 20; min-width: 210px; border: 1px solid #405047; border-radius: 10px; padding: 5px; background: #1a201d; box-shadow: 0 14px 40px rgba(0,0,0,.48); }.task-context-menu button { width: 100%; min-height: 38px; border: 0; border-radius: 7px; padding: 0 10px; color: #dff8e7; background: transparent; text-align: left; }.task-context-menu button:hover, .task-context-menu button:focus-visible { background: #26372d; }
 .loading-card { max-width: 1540px; min-height: 300px; margin: 0 auto; border: 1px solid #2a302d; border-radius: 14px; padding: 100px 20px; color: #727b77; background: #121614; text-align: center; }
+
+@media (max-width: 560px) {
+  .roadmap-toolbar { align-items: stretch; flex-direction: column; gap: 8px; }
+  .roadmap-toolbar > div:first-child { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 9px; }
+  .roadmap-toolbar .visible-month { grid-column: 1 / -1; border-left: 0; padding-left: 0; }
+  .range-controls { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .range-controls button { min-width: 0; padding-inline: 5px; white-space: nowrap; }
+  .roadmap { width: calc(310px + var(--timeline-width)); grid-template-columns: 310px var(--timeline-width); }
+  .info-columns { grid-template-columns: 180px 80px 50px; }
+  .roadmap-row { grid-template-columns: 180px 80px 50px var(--timeline-width); }
+  .status-cell { left: 180px; padding-inline: 7px; }
+  .progress-cell { left: 260px; }
+  .task-info { padding-inline: 9px; }
+}
 
 .setup-banner { display: flex; max-width: 1540px; align-items: center; justify-content: space-between; gap: 18px; margin: 0 auto 14px; border: 1px solid #34513f; border-radius: 13px; padding: 13px 15px; background: linear-gradient(100deg, #16241c, #131915); }
 .setup-banner > div { display: flex; align-items: center; gap: 10px; }.setup-banner > div:last-child { flex: 0 0 auto; }

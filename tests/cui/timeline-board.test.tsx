@@ -60,4 +60,13 @@ describe("WBSロードマップの選択表示", () => {
     expect(markup).toContain('aria-pressed="false"');
     expect(markup).not.toContain("task-selection-badge");
   });
+
+  it("日付セルはヘッダーだけに描画し、各タスク行では共有背景を使う", () => {
+    const markup = render(null);
+    const dayColumns = markup.match(/class="timeline-day/g) ?? [];
+
+    expect(dayColumns).toHaveLength(42);
+    expect(markup).toContain("repeating-linear-gradient");
+    expect(markup).toContain('class="timeline-cells"');
+  });
 });

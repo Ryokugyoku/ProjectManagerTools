@@ -11,8 +11,15 @@ import { buildTimelineDateRange, buildTimelineMonths, buildWbsGroups, flattenWbs
 const DAY_WIDTH = 42;
 
 type Schedule = { plannedStart: string; plannedEnd: string; businessDays: number };
-type DragState = {
-  task: WbsTask; mode: "move" | "left" | "right"; startX: number; preview: Schedule;
+type DragSession = {
+  task: WbsTask;
+  mode: "move" | "left" | "right";
+  startX: number;
+  delta: number;
+  preview: Schedule;
+  element: HTMLElement;
+  originalLeft: string;
+  originalWidth: string;
 };
 type ContextMenuState = { task: WbsTask; x: number; y: number };
 
@@ -31,10 +38,12 @@ export function TimelineBoard({ tasks, milestones, assignees, projects, groupBy,
   onSelectMilestone: (milestone: Milestone) => void;
   onScheduleChange: (task: WbsTask, schedule: Schedule) => Promise<void>;
 }) {
-  const [drag, setDrag] = useState<DragState | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [visibleMonth, setVisibleMonth] = useState("");
   const didDrag = useRef(false);
+  const dragRef = useRef<DragSession | null>(null);
+  const dragFrameRef = useRef<number | null>(null);
+  const scrollFrameRef = useRef<number | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const today = formatISODate(new Date());
@@ -47,6 +56,10 @@ export function TimelineBoard({ tasks, milestones, assignees, projects, groupBy,
     return result;
   }, [milestones]);
   const groups = useMemo(() => buildWbsGroups(tasks, groupBy, projects, assignees), [assignees, groupBy, projects, tasks]);
+  const timelineBackground = useMemo(
+    () => buildTimelineBackground(dates, countryCode, milestonesByDate, today),
+    [countryCode, dates, milestonesByDate, today],
+  );
 
   function scrollByDays(days: number) {
     scrollRef.current?.scrollBy({ left: days * DAY_WIDTH, behavior: "smooth" });
@@ -57,11 +70,19 @@ export function TimelineBoard({ tasks, milestones, assignees, projects, groupBy,
     scrollRef.current?.scrollTo({ left, behavior: "smooth" });
   }
 
-  function updateVisibleMonth() {
+  function updateVisibleMonthNow() {
     const index = Math.min(dates.length - 1, Math.max(0, Math.floor((scrollRef.current?.scrollLeft ?? 0) / DAY_WIDTH)));
     const parsed = parseISODate(dates[index] ?? range.start);
     setVisibleMonth(`${parsed.getFullYear()}年${parsed.getMonth() + 1}月`);
+  }
+
+  function updateVisibleMonth() {
     setContextMenu(null);
+    if (scrollFrameRef.current !== null) return;
+    scrollFrameRef.current = requestAnimationFrame(() => {
+      scrollFrameRef.current = null;
+      updateVisibleMonthNow();
+    });
   }
 
   function openContextMenu(event: React.MouseEvent | React.KeyboardEvent, task: WbsTask) {
@@ -78,7 +99,7 @@ export function TimelineBoard({ tasks, milestones, assignees, projects, groupBy,
     });
   }
 
-  useEffect(() => { updateVisibleMonth(); }, [range.start]);
+  useEffect(() => { updateVisibleMonthNow(); }, [range.start]);
 
   useEffect(() => {
     if (!contextMenu) return;
@@ -95,40 +116,94 @@ export function TimelineBoard({ tasks, milestones, assignees, projects, groupBy,
   }, [contextMenu]);
 
   useEffect(() => {
-    if (!drag) return;
+    function restoreDragElement(current: DragSession) {
+      if (dragFrameRef.current !== null) {
+        cancelAnimationFrame(dragFrameRef.current);
+        dragFrameRef.current = null;
+      }
+      current.element.classList.remove("dragging");
+      current.element.style.left = current.originalLeft;
+      current.element.style.width = current.originalWidth;
+    }
+
     function move(event: PointerEvent) {
-      const delta = Math.round((event.clientX - drag!.startX) / DAY_WIDTH);
+      const current = dragRef.current;
+      if (!current) return;
+      const delta = Math.round((event.clientX - current.startX) / DAY_WIDTH);
+      if (delta === current.delta) return;
       if (delta !== 0) didDrag.current = true;
-      const source = drag!.task;
+      const source = current.task;
       let plannedStart = source.plannedStart;
       let businessDays = source.businessDays;
-      if (drag!.mode === "move") {
+      if (current.mode === "move") {
         plannedStart = shiftBusinessDate(source.plannedStart, delta, countryCode);
-      } else if (drag!.mode === "right") {
+      } else if (current.mode === "right") {
         businessDays = Math.max(1, source.businessDays + delta);
       } else {
         businessDays = Math.max(1, source.businessDays - delta);
         plannedStart = shiftBusinessDate(source.plannedStart, source.businessDays - businessDays, countryCode);
       }
-      setDrag((current) => current ? { ...current, preview: { plannedStart, businessDays, plannedEnd: calculateEndDate(plannedStart, businessDays, countryCode) } } : null);
+      current.delta = delta;
+      current.preview = { plannedStart, businessDays, plannedEnd: calculateEndDate(plannedStart, businessDays, countryCode) };
+      if (dragFrameRef.current !== null) return;
+      dragFrameRef.current = requestAnimationFrame(() => {
+        dragFrameRef.current = null;
+        const latest = dragRef.current;
+        if (!latest) return;
+        latest.element.style.left = `${dayDifference(range.start, latest.preview.plannedStart) * DAY_WIDTH}px`;
+        latest.element.style.width = `${Math.max(DAY_WIDTH, (dayDifference(latest.preview.plannedStart, latest.preview.plannedEnd) + 1) * DAY_WIDTH)}px`;
+      });
     }
-    async function end() {
-      const current = drag;
-      setDrag(null);
+    function end() {
+      const current = dragRef.current;
+      if (!current) return;
+      dragRef.current = null;
+      restoreDragElement(current);
       if (current && (current.preview.plannedStart !== current.task.plannedStart || current.preview.businessDays !== current.task.businessDays)) {
-        await onScheduleChange(current.task, current.preview);
+        void onScheduleChange(current.task, current.preview);
       }
     }
+    function cancel() {
+      const current = dragRef.current;
+      if (!current) return;
+      dragRef.current = null;
+      restoreDragElement(current);
+      didDrag.current = false;
+    }
     window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", end, { once: true });
-    return () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); };
-  }, [countryCode, drag, onScheduleChange]);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", cancel);
+    return () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", cancel);
+      if (dragRef.current) restoreDragElement(dragRef.current);
+      dragRef.current = null;
+      if (scrollFrameRef.current !== null) {
+        cancelAnimationFrame(scrollFrameRef.current);
+        scrollFrameRef.current = null;
+      }
+    };
+  }, [countryCode, onScheduleChange, range.start]);
 
-  function begin(event: React.PointerEvent, task: WbsTask, mode: DragState["mode"]) {
+  function begin(event: React.PointerEvent, task: WbsTask, mode: DragSession["mode"]) {
     event.preventDefault();
     didDrag.current = false;
+    const element = event.currentTarget.closest<HTMLElement>(".timeline-bar");
+    if (!element) return;
+    const session: DragSession = {
+      task,
+      mode,
+      startX: event.clientX,
+      delta: 0,
+      preview: { plannedStart: task.plannedStart, plannedEnd: task.plannedEnd, businessDays: task.businessDays },
+      element,
+      originalLeft: element.style.left,
+      originalWidth: element.style.width,
+    };
+    dragRef.current = session;
+    element.classList.add("dragging");
     onSelect(task);
-    setDrag({ task, mode, startX: event.clientX, preview: { plannedStart: task.plannedStart, plannedEnd: task.plannedEnd, businessDays: task.businessDays } });
   }
 
   async function clickDuration(task: WbsTask, amount: number) {
@@ -141,7 +216,7 @@ export function TimelineBoard({ tasks, milestones, assignees, projects, groupBy,
     });
   }
 
-  async function keyboardAdjust(event: React.KeyboardEvent, task: WbsTask, mode: DragState["mode"]) {
+  async function keyboardAdjust(event: React.KeyboardEvent, task: WbsTask, mode: DragSession["mode"]) {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
     event.preventDefault();
     const delta = event.key === "ArrowRight" ? 1 : -1;
@@ -175,9 +250,8 @@ export function TimelineBoard({ tasks, milestones, assignees, projects, groupBy,
         {groups.map((group) => <div className="roadmap-group" key={group.key}>
           <div className="group-heading"><span className="avatar">{group.initials}</span><strong>{group.label}</strong><small>{group.detail}</small><span className="group-count">{group.tasks.length}件</span></div>
           {flattenWbsTaskTree(group.tasks).map(({ task, depth }) => {
-            const schedule = drag?.task.id === task.id ? drag.preview : task;
-            const left = dayDifference(range.start, schedule.plannedStart) * DAY_WIDTH;
-            const width = Math.max(DAY_WIDTH, (dayDifference(schedule.plannedStart, schedule.plannedEnd) + 1) * DAY_WIDTH);
+            const left = dayDifference(range.start, task.plannedStart) * DAY_WIDTH;
+            const width = Math.max(DAY_WIDTH, (dayDifference(task.plannedStart, task.plannedEnd) + 1) * DAY_WIDTH);
             const selected = selectedId === task.id;
             return <div className={`roadmap-row ${selected ? "selected" : ""}`} key={task.id} onContextMenu={(event) => openContextMenu(event, task)} onKeyDown={(event) => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) openContextMenu(event, task); }}>
               <button className="task-info" style={{ "--task-depth": depth } as React.CSSProperties} aria-pressed={selected} onClick={() => onSelect(task)}>
@@ -186,8 +260,8 @@ export function TimelineBoard({ tasks, milestones, assignees, projects, groupBy,
               </button>
               <span className={`status-cell ${task.status}`}>{statusLabel(task.status)}</span>
               <span className="progress-cell">{task.progress}%</span>
-              <div className="timeline-cells">{dates.map((date) => <DayColumn key={date} date={date} countryCode={countryCode} milestones={milestonesByDate.get(date)} />)}
-                <div className={`timeline-bar ${task.status} ${drag?.task.id === task.id ? "dragging" : ""}`} style={{ left, width }}>
+              <div className="timeline-cells" style={{ backgroundImage: timelineBackground }}>
+                <div className={`timeline-bar ${task.status}`} style={{ left, width }}>
                   <button className="resize-handle left" aria-label={`${task.title}の営業日数を1日減らす。ドラッグで開始側を調整`} onPointerDown={(event) => begin(event, task, "left")} onClick={() => void clickDuration(task, -1)} onKeyDown={(event) => void keyboardAdjust(event, task, "left")}>−</button>
                   <button className="bar-body" title="ドラッグで開始日を移動" onPointerDown={(event) => begin(event, task, "move")} onKeyDown={(event) => void keyboardAdjust(event, task, "move")}><i style={{ width: `${task.progress}%` }} /><span>{task.title}</span></button>
                   <button className="resize-handle right" aria-label={`${task.title}の営業日数を1日増やす。ドラッグで終了側を調整`} onPointerDown={(event) => begin(event, task, "right")} onClick={() => void clickDuration(task, 1)} onKeyDown={(event) => void keyboardAdjust(event, task, "right")}>＋</button>
@@ -226,3 +300,25 @@ function DayColumn({ date, countryCode, milestones = [], header = false, onSelec
 function dayDifference(from: string, to: string) { return Math.round((parseISODate(to).getTime() - parseISODate(from).getTime()) / 86_400_000); }
 function statusLabel(status: WbsTask["status"]) { return { not_started: "未着手", in_progress: "進行中", completed: "完了", on_hold: "保留" }[status]; }
 function formatMilestoneDate(value: string) { return new Intl.DateTimeFormat("ja-JP", { year: "numeric", month: "short", day: "numeric" }).format(parseISODate(value)); }
+
+function buildTimelineBackground(dates: string[], countryCode: string, milestonesByDate: Map<string, Milestone[]>, today: string) {
+  const segments: { color: string; start: number; end: number }[] = [];
+  for (const [index, date] of dates.entries()) {
+    const milestone = milestonesByDate.get(date)?.[0];
+    const color = milestone
+      ? milestoneColorTokens(milestone.color).tint
+      : date === today
+        ? "rgba(121, 242, 166, .08)"
+        : !isBusinessDay(date, countryCode)
+          ? "rgba(232, 150, 140, .045)"
+          : "transparent";
+    const previous = segments[segments.length - 1];
+    if (previous?.color === color) previous.end = index + 1;
+    else segments.push({ color, start: index, end: index + 1 });
+  }
+  const fills = segments.flatMap(({ color, start, end }) => [
+    `${color} ${start * DAY_WIDTH}px`,
+    `${color} ${end * DAY_WIDTH}px`,
+  ]).join(", ");
+  return `repeating-linear-gradient(to right, transparent 0 ${DAY_WIDTH - 1}px, #242a27 ${DAY_WIDTH - 1}px ${DAY_WIDTH}px), linear-gradient(to right, ${fills})`;
+}

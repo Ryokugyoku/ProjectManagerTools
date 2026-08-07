@@ -11,3 +11,8 @@ export function parseBusinessDaysInput(value: string): number | "" {
 export function businessDaysOrDefault(value: number | ""): number {
   return value === "" ? 1 : value;
 }
+
+export function requireDailyProgress(value: number | ""): number {
+  if (value === "") throw new Error("今日進んだ進捗を入力してください。");
+  return value;
+}

@@ -8,7 +8,7 @@ import {
 } from "./lib/wbs";
 import { buildScheduleCascade, buildScheduleCascadeForNewChild, expectedProgress, scheduleChangesRequireReason, type ScheduleChange, type TaskSchedule } from "./lib/wbsPlanning";
 import { TimelineBoard } from "./features/wbs/TimelineBoard";
-import { businessDaysOrDefault, parseBusinessDaysInput, type WbsTaskForm } from "./features/wbs/taskForm";
+import { businessDaysOrDefault, parseBusinessDaysInput, requireDailyProgress, type WbsTaskForm } from "./features/wbs/taskForm";
 import { WbsProjectSelector } from "./features/wbs/WbsProjectSelector";
 import { UsersScreen } from "./features/users/UsersScreen";
 import { SettingsScreen } from "./features/settings/SettingsScreen";
@@ -390,24 +390,36 @@ function FormFields({ form, setForm, projects, assignees, tasks, currentTaskId, 
 }
 
 function ProgressModal({ task, onClose, onSaved, onError }: { task: WbsTask; onClose: () => void; onSaved: () => Promise<void>; onError: (value: string | null) => void }) {
-  const [progress, setProgress] = useState(0);
+  const [progress, setProgress] = useState<number | "">("");
+  const [progressError, setProgressError] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const [delayReason, setDelayReason] = useState("");
   const [saving, setSaving] = useState(false);
   const today = formatISODate(new Date());
   const expected = expectedProgress(task, today);
-  const total = Math.min(100, task.progress + progress);
-  const delayed = task.finalized && total < expected;
+  const progressValue = progress === "" ? 0 : progress;
+  const total = Math.min(100, task.progress + progressValue);
+  const delayed = progress !== "" && task.finalized && total < expected;
   async function submit(event: FormEvent) {
-    event.preventDefault(); setSaving(true);
-    try { await saveDailyProgress(task.id, today, progress, note, delayReason); await onSaved(); }
+    event.preventDefault();
+    let dailyProgress: number;
+    try {
+      dailyProgress = requireDailyProgress(progress);
+      setProgressError(null);
+    } catch (cause) {
+      setProgressError(toMessage(cause));
+      return;
+    }
+    setSaving(true);
+    try { await saveDailyProgress(task.id, today, dailyProgress, note, delayReason); await onSaved(); }
     catch (cause) { onError(toMessage(cause)); setSaving(false); }
   }
   return <Modal title="今日の進捗を記録" onClose={onClose}>
     <form className="modal-form" onSubmit={submit}>
       <p className="modal-lead">{task.title}</p>
-      <div className="progress-comparison"><div><span>今日進んだ進捗</span><strong>+{progress}%</strong></div><div><span>入力後の累計</span><strong>{total}%</strong></div><div className={delayed ? "delayed" : ""}><span>今日時点の計画</span><strong>{expected}%</strong></div></div>
-      <label>今日進んだ進捗（%）<input aria-label="今日進んだ進捗" type="number" min="0" max={100 - task.progress} value={progress} onChange={(e) => setProgress(Math.max(0, Math.min(100 - task.progress, Number(e.currentTarget.value))))} /></label>
+      <div className="progress-comparison"><div><span>今日進んだ進捗</span><strong>+{progressValue}%</strong></div><div><span>入力後の累計</span><strong>{total}%</strong></div><div className={delayed ? "delayed" : ""}><span>今日時点の計画</span><strong>{expected}%</strong></div></div>
+      <label>今日進んだ進捗（%）<input aria-label="今日進んだ進捗" aria-describedby={progressError ? "daily-progress-error" : undefined} aria-invalid={progressError ? "true" : undefined} type="number" min="0" max={100 - task.progress} placeholder="0" value={progress} onChange={(e) => { setProgressError(null); setProgress(e.currentTarget.value === "" ? "" : Math.max(0, Math.min(100 - task.progress, Number(e.currentTarget.value)))); }} /></label>
+      {progressError && <div id="daily-progress-error" className="error" role="alert"><span>{progressError}</span></div>}
       <label>今日のメモ<textarea rows={4} maxLength={500} value={note} onChange={(e) => setNote(e.currentTarget.value)} placeholder="進んだこと、困っていること" /></label>
       {delayed && <label className="delay-reason">計画を下回る理由<span>必須</span><textarea required rows={3} maxLength={1000} value={delayReason} onChange={(e) => setDelayReason(e.currentTarget.value)} placeholder="遅延の要因と対応方針を記載してください" /></label>}
       <div className="modal-actions"><button type="button" className="quiet-button" onClick={onClose}>キャンセル</button><button className="primary-button" disabled={saving || (delayed && !delayReason.trim())}>{saving ? "保存中…" : "記録する"}</button></div>
