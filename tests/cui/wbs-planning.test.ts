@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { WbsTask } from "../../src/lib/wbs";
-import { buildScheduleCascade, countBusinessDays, expectedProgress } from "../../src/lib/wbsPlanning";
+import { buildScheduleCascade, buildScheduleCascadeForNewChild, countBusinessDays, expectedProgress, scheduleChangesRequireReason } from "../../src/lib/wbsPlanning";
 
 const base: WbsTask = {
   id: 1, title: "親", description: "", projectId: 1, projectName: "案件", parentTaskId: null,
@@ -23,5 +23,26 @@ describe("WBS planning methods", () => {
     const changes = buildScheduleCascade([base, child, sibling], 2, { plannedStart: "2026-08-05", plannedEnd: "2026-08-06", businessDays: 2 });
     expect(changes).toHaveLength(2);
     expect(changes[1].after).toEqual({ plannedStart: "2026-08-05", plannedEnd: "2026-08-14", businessDays: 7 });
+  });
+
+  it("updates ancestors when a new child extends their schedule", () => {
+    const child = { ...base, id: 2, title: "既存の子", parentTaskId: 1, parentTaskTitle: "親", plannedStart: "2026-08-03", plannedEnd: "2026-08-07", businessDays: 5 };
+    const changes = buildScheduleCascadeForNewChild([base, child], 1, { plannedStart: "2026-08-10", plannedEnd: "2026-08-18", businessDays: 6 });
+    expect(changes).toEqual([{
+      taskId: 1,
+      before: { plannedStart: "2026-08-03", plannedEnd: "2026-08-14", businessDays: 9 },
+      after: { plannedStart: "2026-08-03", plannedEnd: "2026-08-18", businessDays: 11 },
+    }]);
+  });
+
+  it("requires a reason only when a finalized ancestor schedule changes", () => {
+    const changed = [{
+      taskId: 1,
+      before: { plannedStart: "2026-08-03", plannedEnd: "2026-08-14", businessDays: 9 },
+      after: { plannedStart: "2026-08-03", plannedEnd: "2026-08-18", businessDays: 11 },
+    }];
+    expect(scheduleChangesRequireReason([base], changed)).toBe(true);
+    expect(scheduleChangesRequireReason([{ ...base, finalized: false }], changed)).toBe(false);
+    expect(scheduleChangesRequireReason([base], [])).toBe(false);
   });
 });

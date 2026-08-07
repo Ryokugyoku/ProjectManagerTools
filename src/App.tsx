@@ -6,7 +6,7 @@ import {
   finalizeWbsTask, listTaskHistory, saveDailyProgress, saveScheduleChanges, saveSettings, updateWbsTask,
   type AppSettings, type Assignee, type WbsStatus, type WbsTask, type WorkHistoryEntry,
 } from "./lib/wbs";
-import { buildScheduleCascade, expectedProgress, type ScheduleChange, type TaskSchedule } from "./lib/wbsPlanning";
+import { buildScheduleCascade, buildScheduleCascadeForNewChild, expectedProgress, scheduleChangesRequireReason, type ScheduleChange, type TaskSchedule } from "./lib/wbsPlanning";
 import { TimelineBoard } from "./features/wbs/TimelineBoard";
 import { businessDaysOrDefault, parseBusinessDaysInput, type WbsTaskForm } from "./features/wbs/taskForm";
 import { WbsProjectSelector } from "./features/wbs/WbsProjectSelector";
@@ -154,7 +154,7 @@ function App() {
   const updateSchedule = useCallback(async (task: WbsTask, schedule: TaskSchedule) => {
     try {
       const changes = buildScheduleCascade(tasks, task.id, schedule);
-      if (changes.some((change) => tasks.find((candidate) => candidate.id === change.taskId)?.finalized)) {
+      if (scheduleChangesRequireReason(tasks, changes)) {
         setReschedule({ task, changes });
         return;
       }
@@ -289,13 +289,27 @@ function TaskModal({ settings, projects, assignees, tasks, initialProjectId, ini
     actualStart: null, actualEnd: null,
   });
   const [saving, setSaving] = useState(false);
+  const [reason, setReason] = useState("");
   const businessDays = businessDaysOrDefault(form.businessDays);
   const end = calculateEndDate(form.plannedStart, businessDays, form.countryCode);
   const average = 100 / businessDays;
+  const parentChanges = buildScheduleCascadeForNewChild(tasks, form.parentTaskId, { plannedStart: form.plannedStart, plannedEnd: end, businessDays });
+  const requiresReason = scheduleChangesRequireReason(tasks, parentChanges);
 
   async function submit(event: FormEvent) {
     event.preventDefault(); setSaving(true);
-    try { await createWbsTask({ ...form, businessDays, plannedEnd: end }); await onSaved(); }
+    try {
+      await createWbsTask({ ...form, businessDays, plannedEnd: end });
+      if (requiresReason) {
+        await saveScheduleChanges(parentChanges.map((change) => ({ taskId: change.taskId, ...change.after })), reason);
+      } else {
+        for (const change of parentChanges) {
+          const current = tasks.find((task) => task.id === change.taskId);
+          if (current) await updateWbsTask(current.id, { ...current, ...change.after });
+        }
+      }
+      await onSaved();
+    }
     catch (cause) { onError(toMessage(cause)); setSaving(false); }
   }
 
@@ -308,7 +322,12 @@ function TaskModal({ settings, projects, assignees, tasks, initialProjectId, ini
         <div><small>1日の平均進捗</small><strong>{average.toFixed(1)}%</strong></div>
       </div>
       {businessDays >= 5 && <div className="warning" role="status"><strong>サブタスクへの分割をおすすめします</strong><span>5営業日以上のタスクです。完了条件が明確な小さなサブタスクとして分割すると、遅れを早く発見できます。</span></div>}
-      <div className="modal-actions"><button type="button" className="quiet-button" onClick={onClose}>キャンセル</button><button className="primary-button" disabled={saving || !form.title.trim()}>{saving ? "保存中…" : "登録する"}</button></div>
+      {requiresReason && <>
+        <p className="modal-lead">サブタスクの追加により、確定済みの親タスクの日程が変わります。</p>
+        <div className="schedule-change-list">{parentChanges.map((change) => <div key={change.taskId}><strong>{tasks.find((item) => item.id === change.taskId)?.title ?? `タスク #${change.taskId}`}</strong><span>{change.before.plannedStart}〜{change.before.plannedEnd}</span><b>→</b><span>{change.after.plannedStart}〜{change.after.plannedEnd}</span></div>)}</div>
+        <label>変更理由<span className="required-label">必須</span><textarea required rows={4} maxLength={1000} value={reason} onChange={(event) => setReason(event.currentTarget.value)} placeholder="変更が必要になった背景と影響を記載してください" /></label>
+      </>}
+      <div className="modal-actions"><button type="button" className="quiet-button" onClick={onClose}>キャンセル</button><button className="primary-button" disabled={saving || !form.title.trim() || (requiresReason && !reason.trim())}>{saving ? "保存中…" : requiresReason ? "理由を記録して登録" : "登録する"}</button></div>
     </form>
   </Modal>;
 }

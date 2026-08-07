@@ -60,6 +60,48 @@ export function buildScheduleCascade(tasks: WbsTask[], taskId: number, schedule:
   return changes;
 }
 
+export function buildScheduleCascadeForNewChild(tasks: WbsTask[], parentTaskId: number | null, schedule: TaskSchedule): ScheduleChange[] {
+  if (parentTaskId === null) return [];
+  const byId = new Map(tasks.map((task) => [task.id, task]));
+  if (!byId.has(parentTaskId)) throw new Error("親タスクが見つかりません。");
+  const schedules = new Map(tasks.map((task) => [task.id, taskSchedule(task)]));
+  const changes: ScheduleChange[] = [];
+  let currentParentId: number | null = parentTaskId;
+  let addedChildSchedule: TaskSchedule | null = schedule;
+  const visited = new Set<number>();
+  while (currentParentId !== null && !visited.has(currentParentId)) {
+    visited.add(currentParentId);
+    const parent = byId.get(currentParentId);
+    if (!parent) break;
+    const childSchedules = tasks
+      .filter((task) => task.parentTaskId === currentParentId)
+      .map((child) => schedules.get(child.id) ?? taskSchedule(child));
+    if (addedChildSchedule) childSchedules.push(addedChildSchedule);
+    const plannedStart = childSchedules.map((item) => item.plannedStart).sort()[0];
+    const sortedEnds = childSchedules.map((item) => item.plannedEnd).sort();
+    const plannedEnd = sortedEnds[sortedEnds.length - 1];
+    if (!plannedStart || !plannedEnd) break;
+    const after = {
+      plannedStart,
+      plannedEnd,
+      businessDays: Math.max(1, countBusinessDays(plannedStart, plannedEnd, parent.countryCode)),
+    };
+    const before = schedules.get(parent.id) ?? taskSchedule(parent);
+    schedules.set(parent.id, after);
+    if (before.plannedStart !== after.plannedStart || before.plannedEnd !== after.plannedEnd || before.businessDays !== after.businessDays) {
+      changes.push({ taskId: parent.id, before, after });
+    }
+    addedChildSchedule = null;
+    currentParentId = parent.parentTaskId;
+  }
+  return changes;
+}
+
+export function scheduleChangesRequireReason(tasks: WbsTask[], changes: ScheduleChange[]): boolean {
+  const changedTaskIds = new Set(changes.map((change) => change.taskId));
+  return tasks.some((task) => changedTaskIds.has(task.id) && task.finalized);
+}
+
 function taskSchedule(task: WbsTask): TaskSchedule {
   return { plannedStart: task.plannedStart, plannedEnd: task.plannedEnd, businessDays: task.businessDays };
 }
