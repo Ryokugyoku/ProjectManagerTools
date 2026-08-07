@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildBurndownSeries, buildDependencyAnalysis, currentRemainingEffort, dependencyIds, summarizeProgressHealth } from "../../src/lib/wbsAnalysis";
+import { buildBurndownSeries, buildDependencyAnalysis, buildDependencyScope, currentRemainingEffort, dependencyIds, summarizeProgressHealth } from "../../src/lib/wbsAnalysis";
 import type { WbsTask } from "../../src/lib/wbs";
 
 const base: WbsTask = { id: 1, title: "要件", description: "", projectId: 1, projectName: "案件", parentTaskId: null, parentTaskTitle: null, assigneeId: 1, assigneeName: "山田", status: "in_progress", progress: 50, countryCode: "JP", plannedStart: "2026-08-03", plannedEnd: "2026-08-07", businessDays: 5, actualStart: null, actualEnd: null, finalized: true };
@@ -19,6 +19,25 @@ describe("WBS analysis methods", () => {
     const analysis = buildDependencyAnalysis([{ ...base, prerequisiteTaskIds: [2] }, { ...base, id: 2, prerequisiteTaskIds: [1] }]);
     expect(analysis.hasCycle).toBe(true);
     expect(analysis.nodes).toHaveLength(2);
+  });
+
+  it("builds one dependency level and its breadcrumb path recursively", () => {
+    const root = { ...base, id: 10, title: "親工程" };
+    const child = { ...base, id: 11, title: "子工程", parentTaskId: 10, parentTaskTitle: "親工程" };
+    const grandchild = { ...base, id: 12, title: "孫工程", parentTaskId: 11, parentTaskTitle: "子工程" };
+    const sibling = { ...base, id: 13, title: "別の親工程" };
+    const tasks = [root, child, grandchild, sibling];
+
+    expect(buildDependencyScope(tasks, null).tasks.map((task) => task.id)).toEqual([10, 13]);
+    const childScope = buildDependencyScope(tasks, 11);
+    expect(childScope.parentTask?.id).toBe(11);
+    expect(childScope.breadcrumbs.map((task) => task.id)).toEqual([10, 11]);
+    expect(childScope.tasks.map((task) => task.id)).toEqual([12]);
+  });
+
+  it("falls back to the project root for a missing scope task", () => {
+    const root = { ...base, id: 10, title: "親工程" };
+    expect(buildDependencyScope([root], 999)).toEqual({ parentTask: null, breadcrumbs: [], tasks: [root] });
   });
 
   it("builds planned burn-down points and current remaining leaf effort", () => {

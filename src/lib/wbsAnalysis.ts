@@ -20,10 +20,35 @@ export type DependencyAnalysis = {
   hasCycle: boolean;
 };
 
+export type DependencyScope = {
+  parentTask: WbsTask | null;
+  breadcrumbs: WbsTask[];
+  tasks: WbsTask[];
+};
+
 export type BurndownPoint = { date: string; plannedRemaining: number };
 
 export function dependencyIds(task: WbsTask): number[] {
   return task.prerequisiteTaskIds ?? (task.prerequisiteTaskId == null ? [] : [task.prerequisiteTaskId]);
+}
+
+export function buildDependencyScope(tasks: WbsTask[], parentTaskId: number | null): DependencyScope {
+  const byId = new Map(tasks.map((task) => [task.id, task]));
+  const parentTask = parentTaskId === null ? null : byId.get(parentTaskId) ?? null;
+  const effectiveParentId = parentTask?.id ?? null;
+  const breadcrumbs: WbsTask[] = [];
+  const visited = new Set<number>();
+  let current: WbsTask | undefined = parentTask ?? undefined;
+  while (current && !visited.has(current.id)) {
+    visited.add(current.id);
+    breadcrumbs.unshift(current);
+    current = current.parentTaskId === null ? undefined : byId.get(current.parentTaskId);
+  }
+  return {
+    parentTask,
+    breadcrumbs,
+    tasks: tasks.filter((task) => task.parentTaskId === effectiveParentId),
+  };
 }
 
 export function buildDependencyAnalysis(tasks: WbsTask[]): DependencyAnalysis {

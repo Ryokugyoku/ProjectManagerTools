@@ -25,4 +25,16 @@ describe("analysis screen", () => {
     expect(markup).toContain('role="button"');
     expect(markup).not.toContain("delay-callout");
   });
+
+  it("shows parent tasks as drill-down scopes without mixing their children into the root diagram", () => {
+    const parent = { ...base, id: 10, title: "設計フェーズ", latestDelayReason: "" };
+    const child = { ...base, id: 11, title: "画面設計", parentTaskId: 10, parentTaskTitle: "設計フェーズ", latestDelayReason: "" };
+    const markup = renderToStaticMarkup(<AnalysisScreen projects={[project]} tasks={[parent, child]} today="2026-08-08" loading={false} />);
+    expect(markup).toContain("基幹刷新 の親タスク依存関係");
+    expect(markup).toContain("アローダイアグラムの現在階層");
+    expect(markup).toContain("has-children");
+    expect(markup).toContain("子タスク 1件");
+    expect(markup).toContain("内部のダイアグラムを表示");
+    expect(markup).not.toContain("画面設計");
+  });
 });

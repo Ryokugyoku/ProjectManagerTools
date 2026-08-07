@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import type { Project } from "../../lib/projects";
 import type { WbsTask } from "../../lib/wbs";
-import { buildBurndownSeries, buildDependencyAnalysis, currentRemainingEffort, summarizeProgressHealth } from "../../lib/wbsAnalysis";
+import { buildBurndownSeries, buildDependencyAnalysis, buildDependencyScope, currentRemainingEffort, summarizeProgressHealth } from "../../lib/wbsAnalysis";
 import { isTaskDelayed, progressHealth } from "../../lib/wbsPlanning";
 
 type Chart = "critical" | "burndown" | "health";
@@ -13,7 +13,8 @@ export function AnalysisScreen({ projects, tasks, today, loading }: { projects: 
   const selectedProjectId = availableProjects.some((project) => project.id === projectId) ? projectId : availableProjects[0]?.id ?? null;
   const project = projects.find((item) => item.id === selectedProjectId) ?? null;
   const projectTasks = useMemo(() => tasks.filter((task) => task.projectId === selectedProjectId), [selectedProjectId, tasks]);
-  const analysis = useMemo(() => buildDependencyAnalysis(projectTasks), [projectTasks]);
+  const rootTasks = useMemo(() => buildDependencyScope(projectTasks, null).tasks, [projectTasks]);
+  const analysis = useMemo(() => buildDependencyAnalysis(rootTasks), [rootTasks]);
 
   return <main className="analysis-screen screen-shell">
     <header className="screen-header analysis-header"><div><p className="eyebrow">PROJECT ANALYTICS</p><h1>案件分析</h1><p>依存関係と進捗から、遅延の連鎖と完了までのボトルネックを確認します。</p></div>
@@ -31,21 +32,26 @@ export function AnalysisScreen({ projects, tasks, today, loading }: { projects: 
         <button role="tab" aria-selected={chart === "health"} className={chart === "health" ? "active" : ""} onClick={() => setChart("health")}>進捗健全性</button>
       </div>
       <section className="analysis-workspace" role="tabpanel">
-        {chart === "critical" ? <CriticalPathChart analysis={analysis} today={today} /> : chart === "burndown" ? <BurndownChart tasks={projectTasks} today={today} /> : <HealthChart tasks={projectTasks} today={today} />}
+        {chart === "critical" ? <CriticalPathChart key={project.id} tasks={projectTasks} projectName={project.name} today={today} /> : chart === "burndown" ? <BurndownChart tasks={projectTasks} today={today} /> : <HealthChart tasks={projectTasks} today={today} />}
       </section>
     </>}
   </main>;
 }
 
-function CriticalPathChart({ analysis, today }: { analysis: ReturnType<typeof buildDependencyAnalysis>; today: string }) {
+function CriticalPathChart({ tasks, projectName, today }: { tasks: WbsTask[]; projectName: string; today: string }) {
+  const [scopeTaskId, setScopeTaskId] = useState<number | null>(null);
+  const scope = buildDependencyScope(tasks, scopeTaskId);
+  const analysis = buildDependencyAnalysis(scope.tasks);
+  const childCounts = new Map<number, number>();
+  for (const task of tasks) if (task.parentTaskId !== null) childCounts.set(task.parentTaskId, (childCounts.get(task.parentTaskId) ?? 0) + 1);
   const delayedTaskId = analysis.nodes.find((node) => isTaskDelayed(node.task, today))?.task.id ?? null;
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(delayedTaskId ?? analysis.criticalTaskIds[0] ?? analysis.nodes[0]?.task.id ?? null);
-  if (analysis.nodes.length === 0) return <ChartEmpty title="表示するタスクがありません" description="WBSへタスクを追加してください。" />;
+  if (analysis.nodes.length === 0) return <ChartEmpty title="表示するタスクがありません" description="この階層へサブタスクを追加してください。" />;
   const layers = new Map<number, typeof analysis.nodes>();
   for (const node of analysis.nodes) layers.set(node.layer, [...(layers.get(node.layer) ?? []), node]);
   const maxRows = Math.max(...[...layers.values()].map((items) => items.length));
   const nodeWidth = 184;
-  const nodeHeight = 76;
+  const nodeHeight = 90;
   const layerCount = Math.max(1, layers.size);
   const horizontalInset = 84;
   const width = Math.max(1080, horizontalInset * 2 + nodeWidth * layerCount + Math.max(0, layerCount - 1) * 76);
@@ -75,17 +81,20 @@ function CriticalPathChart({ analysis, today }: { analysis: ReturnType<typeof bu
   const selectedNode = analysis.nodes.find((node) => node.task.id === selectedTaskId) ?? analysis.nodes.find((node) => node.task.id === delayedTaskId) ?? analysis.nodes[0];
   const selectedState = networkNodeState(selectedNode, delayedIds, affectedIds, today);
   const selectedReason = selectedNode.task.latestDelayReason?.trim() || "遅延理由はまだ記録されていません。";
-  return <div className="chart-layout network-layout"><div className="chart-heading"><div><p className="eyebrow">DEPENDENCY NETWORK</p><h2>プロジェクト完了までの依存ネットワーク</h2></div><div className="chart-key"><span><i className="delay" />遅延・影響</span><span><i className="completed" />完了</span><span><i className="ahead" />前倒し</span><span><i className="critical" />クリティカル</span></div></div>
+  const selectedChildCount = childCounts.get(selectedNode.task.id) ?? 0;
+  const openScope = (taskId: number) => { setScopeTaskId(taskId); setSelectedTaskId(null); };
+  return <div className="chart-layout network-layout"><div className="chart-heading"><div><p className="eyebrow">DEPENDENCY NETWORK</p><h2>{scope.parentTask ? `${scope.parentTask.title} の内部工程` : `${projectName} の親タスク依存関係`}</h2></div><div className="chart-key"><span><i className="delay" />遅延・影響</span><span><i className="completed" />完了</span><span><i className="ahead" />前倒し</span><span><i className="critical" />クリティカル</span></div></div>
+    <nav className="network-breadcrumbs" aria-label="アローダイアグラムの現在階層"><button type="button" onClick={() => { setScopeTaskId(null); setSelectedTaskId(null); }}>{projectName}</button>{scope.breadcrumbs.map((task, index) => <span key={task.id}><i aria-hidden="true">›</i>{index === scope.breadcrumbs.length - 1 ? <strong aria-current="page">{task.title}</strong> : <button type="button" onClick={() => { setScopeTaskId(task.id); setSelectedTaskId(null); }}>{task.title}</button>}</span>)}</nav>
     {analysis.hasCycle && <p className="chart-warning" role="alert">循環する依存関係が含まれるため、経路計算は参考値です。</p>}
-    <div className={`network-inspector ${selectedState.className}`} aria-live="polite"><div className="inspector-title"><span><i />{selectedState.label}</span><strong>{selectedNode.task.title}</strong></div><dl><div><dt>期間</dt><dd>{selectedNode.task.businessDays}営業日</dd></div><div><dt>進捗</dt><dd>{selectedNode.task.progress}%</dd></div><div><dt>余裕</dt><dd>{selectedNode.totalFloat}日</dd></div></dl>{selectedState.key === "delay" && <p><span>遅延理由</span>{selectedReason}</p>}</div>
+    <div className={`network-inspector ${selectedState.className}`} aria-live="polite"><div className="inspector-title"><span><i />{selectedState.label}</span><strong>{selectedNode.task.title}</strong></div><dl><div><dt>期間</dt><dd>{selectedNode.task.businessDays}営業日</dd></div><div><dt>進捗</dt><dd>{selectedNode.task.progress}%</dd></div><div><dt>余裕</dt><dd>{selectedNode.totalFloat}日</dd></div></dl>{(selectedChildCount > 0 || selectedState.key === "delay") && <div className="inspector-context">{selectedChildCount > 0 && <button className="scope-open-button" type="button" onClick={() => openScope(selectedNode.task.id)}>内部のダイアグラムを表示 <span>{selectedChildCount}件</span></button>}{selectedState.key === "delay" && <p><span>遅延理由</span>{selectedReason}</p>}</div>}</div>
     <div className="dependency-chart"><svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet" role="img" aria-labelledby="critical-title critical-desc"><title id="critical-title">クリティカルパスの依存ネットワーク</title><desc id="critical-desc">タスクを工程ごとに配置し、依存関係と遅延の伝播を線で示します。ノードを選択すると詳細を確認できます。</desc>
       <defs><pattern id="network-grid" width="28" height="28" patternUnits="userSpaceOnUse"><path d="M 28 0 L 0 0 0 28" /></pattern><filter id="edge-glow" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="4" result="blur" /><feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge></filter><marker id="arrow-normal" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" /></marker><marker id="arrow-critical" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" /></marker><marker id="arrow-delay" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" /></marker></defs>
       <rect className="network-grid" width={width} height={height} />
       {[...layers.keys()].map((layer) => { const x = layerCount === 1 ? width / 2 : horizontalInset + layer * horizontalGap + nodeWidth / 2; return <g className="network-stage" key={layer}><text x={x} y="28" textAnchor="middle">STAGE {String(layer + 1).padStart(2, "0")}</text><line x1={x} y1="42" x2={x} y2={height - 26} /></g>; })}
       {analysis.edges.map((edge) => { const from = positions.get(edge.from)!; const to = positions.get(edge.to)!; const impacted = impactedEdges.has(`${edge.from}-${edge.to}`); const className = impacted ? "delay-impact-edge" : edge.critical ? "critical-edge" : "dependency-edge"; const startX = from.x + nodeWidth + 7; const startY = from.y + nodeHeight / 2; const endX = to.x - 10; const endY = to.y + nodeHeight / 2; const bend = Math.max(54, (endX - startX) * .46); const path = `M ${startX} ${startY} C ${startX + bend} ${startY}, ${endX - bend} ${endY}, ${endX} ${endY}`; return <g key={`${edge.from}-${edge.to}`} className={`network-edge ${className}`}><path className="edge-aura" d={path} /><path className="edge-line" markerEnd={`url(#arrow-${impacted ? "delay" : edge.critical ? "critical" : "normal"})`} d={path} /></g>; })}
-      {analysis.nodes.map((node, index) => { const point = positions.get(node.task.id)!; const visual = networkNodeState(node, delayedIds, affectedIds, today); const selected = node.task.id === selectedNode.task.id; return <g key={node.task.id} className={`network-node ${visual.className}${selected ? " selected" : ""}`} transform={`translate(${point.x} ${point.y})`} tabIndex={0} role="button" onClick={() => setSelectedTaskId(node.task.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedTaskId(node.task.id); } }} aria-pressed={selected} aria-label={`${node.task.title}、${visual.label}、進捗${node.task.progress}%、${node.task.businessDays}営業日、余裕${node.totalFloat}日`}><rect className="node-halo" x="-4" y="-4" width={nodeWidth + 8} height={nodeHeight + 8} rx="18" /><rect className="node-surface" width={nodeWidth} height={nodeHeight} rx="14" /><circle className="node-status" cx="18" cy="19" r="5" /><text className="node-order" x={nodeWidth - 14} y="22" textAnchor="end">{String(index + 1).padStart(2, "0")}</text><text className="node-title" x="31" y="23">{truncate(node.task.title, 15)}</text><g className="node-chip" transform="translate(14 40)"><rect width="72" height="23" rx="11.5" /><text x="36" y="15" textAnchor="middle">{visual.label}</text></g><text className="node-metrics" x={nodeWidth - 14} y="55" textAnchor="end">{node.task.progress}% · {node.task.businessDays}d</text><circle className="node-port input" cx="-1" cy={nodeHeight / 2} r="3.5" /><circle className="node-port output" cx={nodeWidth + 1} cy={nodeHeight / 2} r="3.5" /></g>; })}
+      {analysis.nodes.map((node, index) => { const point = positions.get(node.task.id)!; const visual = networkNodeState(node, delayedIds, affectedIds, today); const selected = node.task.id === selectedNode.task.id; const childCount = childCounts.get(node.task.id) ?? 0; const activate = () => childCount > 0 ? openScope(node.task.id) : setSelectedTaskId(node.task.id); return <g key={node.task.id} className={`network-node ${visual.className}${childCount > 0 ? " has-children" : ""}${selected ? " selected" : ""}`} transform={`translate(${point.x} ${point.y})`} tabIndex={0} role="button" onClick={activate} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); activate(); } }} aria-pressed={childCount === 0 ? selected : undefined} aria-label={`${node.task.title}、${visual.label}、進捗${node.task.progress}%、${node.task.businessDays}営業日、余裕${node.totalFloat}日${childCount > 0 ? `、サブタスク${childCount}件。押すと内部のアローダイアグラムを表示` : ""}`}><rect className="node-halo" x="-4" y="-4" width={nodeWidth + 8} height={nodeHeight + 8} rx="18" /><rect className="node-surface" width={nodeWidth} height={nodeHeight} rx="14" />{childCount > 0 && <rect className="node-scope-frame" x="7" y="7" width={nodeWidth - 14} height={nodeHeight - 14} rx="10" />}<circle className="node-status" cx="18" cy="19" r="5" /><text className="node-order" x={nodeWidth - 14} y="22" textAnchor="end">{String(index + 1).padStart(2, "0")}</text><text className="node-title" x="31" y="23">{truncate(node.task.title, 15)}</text><g className="node-chip" transform="translate(14 38)"><rect width="72" height="23" rx="11.5" /><text x="36" y="15" textAnchor="middle">{visual.label}</text></g><text className="node-metrics" x={nodeWidth - 14} y="53" textAnchor="end">{node.task.progress}% · {node.task.businessDays}d</text><text className="node-scope-label" x={nodeWidth - 14} y="77" textAnchor="end">{childCount > 0 ? `子タスク ${childCount}件  ›` : "末端タスク"}</text><circle className="node-port input" cx="-1" cy={nodeHeight / 2} r="3.5" /><circle className="node-port output" cx={nodeWidth + 1} cy={nodeHeight / 2} r="3.5" /></g>; })}
     </svg></div>
-    <p className="chart-note">算出根拠：登録済みの営業日数と完了前提。赤は現在の遅延起点から影響を受ける後続経路、緑は遅延余裕0日のクリティカル経路です。</p>
+    <p className="chart-note">現在の階層にある直属タスク同士の完了前提を表示しています。子タスクを持つ大枠を押すと内部工程へ移動し、パンくずから上位階層へ戻れます。</p>
   </div>;
 }
 
