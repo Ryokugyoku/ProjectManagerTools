@@ -69,7 +69,7 @@ export function calculateTaskScheduleVariance(
 }
 
 export function calculateDelayImpact(task: WbsTask, tasks: WbsTask[], delayBusinessDays: number): DelayImpact {
-  const successorTasks = tasks.filter((candidate) => candidate.prerequisiteTaskId === task.id);
+  const successorTasks = tasks.filter((candidate) => (candidate.prerequisiteTaskIds ?? (candidate.prerequisiteTaskId == null ? [] : [candidate.prerequisiteTaskId])).includes(task.id));
   const projectedEnd = shiftBusinessDate(task.plannedEnd, Math.ceil(Math.abs(delayBusinessDays)), task.countryCode);
   return {
     successorTasks,

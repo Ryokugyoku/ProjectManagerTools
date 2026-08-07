@@ -15,6 +15,7 @@ import { SettingsScreen } from "./features/settings/SettingsScreen";
 import { ProjectsScreen } from "./features/projects/ProjectsScreen";
 import { HomeScreen } from "./features/home/HomeScreen";
 import { DailyReportScreen } from "./features/reports/DailyReportScreen";
+import { AnalysisScreen } from "./features/analysis/AnalysisScreen";
 import { previousBusinessDate } from "./lib/dailyReport";
 import { listProjects, type Project } from "./lib/projects";
 import { createMilestone, deleteMilestone, listMilestones, MILESTONE_COLOR_OPTIONS, updateMilestone, type Milestone, type MilestoneInput } from "./lib/milestones";
@@ -22,7 +23,7 @@ import { MilestonePanel } from "./features/wbs/MilestonePanel";
 import { dailyProgressActionLabel, filterWbsTasks, parentTaskCandidates, prerequisiteTaskCandidates, summarizeWbsTasks, type WbsFilters, type WbsFilterValue, type WbsGroupBy } from "./lib/wbsView";
 import "./App.css";
 
-type View = "home" | "wbs" | "reports" | "projects" | "users" | "settings";
+type View = "home" | "wbs" | "analysis" | "reports" | "projects" | "users" | "settings";
 type WbsRoadmapMode = "select" | "all" | "project";
 
 const statusLabels: Record<WbsStatus, string> = {
@@ -199,6 +200,9 @@ function App() {
         <button className={view === "wbs" ? "active" : ""} onClick={openWbsProjectSelection} aria-label="WBS">
           <span aria-hidden="true">▦</span><small>WBS</small>
         </button>
+        <button className={view === "analysis" ? "active" : ""} onClick={() => setView("analysis")} aria-label="分析">
+          <span aria-hidden="true">⌁</span><small>分析</small>
+        </button>
         <button className={view === "reports" ? "active" : ""} onClick={() => setView("reports")} aria-label="作業報告">
           <span aria-hidden="true">◷</span><small>報告</small>
         </button>
@@ -217,6 +221,8 @@ function App() {
 
       {view === "home" ? (
         <HomeScreen tasks={tasks} projects={projects} users={assignees} loading={loading} onNavigate={(nextView) => nextView === "wbs" ? openWbsProjectSelection() : setView(nextView)} onOpenTask={(task) => { setRoadmapMode(task.projectId === null ? "all" : "project"); setSelectedRoadmapProjectId(task.projectId); setFilters({ query: "", projectId: task.projectId ?? "all", assigneeId: "all", status: "all" }); setSelectedId(task.id); setView("wbs"); }} />
+      ) : view === "analysis" ? (
+        <AnalysisScreen projects={projects} tasks={tasks} today={currentDate} loading={loading} />
       ) : view === "reports" ? (
         <DailyReportScreen projects={projects} tasks={tasks} snapshots={reportSnapshots} reportDate={reportDate} loading={loading || reportLoading} />
       ) : view === "users" ? (
@@ -311,7 +317,7 @@ function TaskModal({ settings, projects, assignees, tasks, initialProjectId, ini
   const today = formatISODate(new Date());
   const parentTask = tasks.find((task) => task.id === initialParentTaskId);
   const [form, setForm] = useState<WbsTaskForm>({
-    title: "", description: "", projectId: parentTask?.projectId ?? initialProjectId, parentTaskId: initialParentTaskId, prerequisiteTaskId: null, assigneeId: null, status: "not_started", progress: 0,
+    title: "", description: "", projectId: parentTask?.projectId ?? initialProjectId, parentTaskId: initialParentTaskId, prerequisiteTaskId: null, prerequisiteTaskIds: [], assigneeId: null, status: "not_started", progress: 0,
     countryCode: settings.countryCode, plannedStart: today,
     plannedEnd: calculateEndDate(today, 1, settings.countryCode), businessDays: "",
     actualStart: null, actualEnd: null,
@@ -405,10 +411,10 @@ function FormFields({ form, setForm, projects, assignees, tasks, currentTaskId, 
   return <div className="field-grid">
     <label className="wide">タスク名<input value={form.title} maxLength={120} required onChange={(e) => setForm({ ...form, title: e.currentTarget.value })} placeholder="例：要件定義レビュー" /></label>
     <label className="wide">作業の概要<textarea value={form.description} maxLength={1000} rows={3} onChange={(e) => setForm({ ...form, description: e.currentTarget.value })} placeholder="担当者が行う作業、完了条件、報告時に共有したい前提" /></label>
-    <label>所属案件<select value={form.projectId ?? ""} onChange={(e) => { const projectId = e.currentTarget.value ? Number(e.currentTarget.value) : null; const project = projects.find((item) => item.id === projectId); const keepAssignee = !project || project.members.some((member) => member.userId === form.assigneeId); const keepParent = tasks.some((task) => task.id === form.parentTaskId && task.projectId === projectId); const parentTaskId = keepParent ? form.parentTaskId : null; const keepPrerequisite = tasks.some((task) => task.id === form.prerequisiteTaskId && task.projectId === projectId && (task.parentTaskId ?? null) === parentTaskId); setForm({ ...form, projectId, parentTaskId, prerequisiteTaskId: keepPrerequisite ? form.prerequisiteTaskId : null, assigneeId: keepAssignee ? form.assigneeId : null }); }}><option value="">案件未設定</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
+    <label>所属案件<select value={form.projectId ?? ""} onChange={(e) => { const projectId = e.currentTarget.value ? Number(e.currentTarget.value) : null; const project = projects.find((item) => item.id === projectId); const keepAssignee = !project || project.members.some((member) => member.userId === form.assigneeId); const keepParent = tasks.some((task) => task.id === form.parentTaskId && task.projectId === projectId); const parentTaskId = keepParent ? form.parentTaskId : null; const prerequisiteTaskIds = (form.prerequisiteTaskIds ?? []).filter((id) => tasks.some((task) => task.id === id && task.projectId === projectId && (task.parentTaskId ?? null) === parentTaskId)); setForm({ ...form, projectId, parentTaskId, prerequisiteTaskId: prerequisiteTaskIds[0] ?? null, prerequisiteTaskIds, assigneeId: keepAssignee ? form.assigneeId : null }); }}><option value="">案件未設定</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
     <label>担当者<select value={form.assigneeId ?? ""} onChange={(e) => setForm({ ...form, assigneeId: e.currentTarget.value ? Number(e.currentTarget.value) : null })}><option value="">未設定</option>{availableAssignees.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select>{selectedProject && availableAssignees.length === 0 && <small>この案件にはユーザーが紐づいていません。</small>}</label>
-    <label className="wide">親タスク<select value={form.parentTaskId ?? ""} onChange={(e) => { const parentTaskId = e.currentTarget.value ? Number(e.currentTarget.value) : null; const keepPrerequisite = tasks.some((task) => task.id === form.prerequisiteTaskId && task.projectId === form.projectId && (task.parentTaskId ?? null) === parentTaskId); setForm({ ...form, parentTaskId, prerequisiteTaskId: keepPrerequisite ? form.prerequisiteTaskId : null }); }}><option value="">親なし（最上位）</option>{availableParents.map((task) => <option key={task.id} value={task.id}>{task.parentTaskTitle ? `${task.parentTaskTitle} › ` : ""}{task.title}</option>)}</select><small>子タスクにも同じ操作で子を追加でき、階層を深くできます。</small></label>
-    <label className="wide">完了が前提となるタスク<select value={form.prerequisiteTaskId ?? ""} onChange={(e) => setForm({ ...form, prerequisiteTaskId: e.currentTarget.value ? Number(e.currentTarget.value) : null })}><option value="">前提タスクなし</option>{availablePrerequisites.map((task) => <option key={task.id} value={task.id}>{task.title}（{task.plannedEnd}完了予定）</option>)}</select><small>同じ案件・同じ親タスク配下にある、自身以外のタスクだけを選択できます。</small></label>
+    <label className="wide">親タスク<select value={form.parentTaskId ?? ""} onChange={(e) => { const parentTaskId = e.currentTarget.value ? Number(e.currentTarget.value) : null; const prerequisiteTaskIds = (form.prerequisiteTaskIds ?? []).filter((id) => tasks.some((task) => task.id === id && task.projectId === form.projectId && (task.parentTaskId ?? null) === parentTaskId)); setForm({ ...form, parentTaskId, prerequisiteTaskId: prerequisiteTaskIds[0] ?? null, prerequisiteTaskIds }); }}><option value="">親なし（最上位）</option>{availableParents.map((task) => <option key={task.id} value={task.id}>{task.parentTaskTitle ? `${task.parentTaskTitle} › ` : ""}{task.title}</option>)}</select><small>子タスクにも同じ操作で子を追加でき、階層を深くできます。</small></label>
+    <fieldset className="wide prerequisite-picker"><legend>完了が前提となるタスク（複数選択可）</legend>{availablePrerequisites.length === 0 ? <p>選択できる同階層タスクはありません。</p> : availablePrerequisites.map((task) => { const checked = (form.prerequisiteTaskIds ?? []).includes(task.id); return <label key={task.id}><input type="checkbox" checked={checked} onChange={() => { const prerequisiteTaskIds = checked ? (form.prerequisiteTaskIds ?? []).filter((id) => id !== task.id) : [...(form.prerequisiteTaskIds ?? []), task.id]; setForm({ ...form, prerequisiteTaskId: prerequisiteTaskIds[0] ?? null, prerequisiteTaskIds }); }} /><span><strong>{task.title}</strong><small>{task.plannedEnd} 完了予定</small></span></label>; })}<small>同じ案件・同じ親タスク配下から複数選択できます。循環する組み合わせは保存できません。</small></fieldset>
     <label>開始予定日<input type="date" required disabled={scheduleLocked} value={form.plannedStart} onChange={(e) => setForm({ ...form, plannedStart: e.currentTarget.value })} /></label>
     <label>営業日数<input type="number" min="1" max="999" placeholder="1" value={form.businessDays} disabled={scheduleLocked} onChange={(e) => setForm({ ...form, businessDays: parseBusinessDaysInput(e.currentTarget.value) })} />{!includeActual && <small>未入力の場合は1営業日です。</small>}</label>
     {includeActual && <>

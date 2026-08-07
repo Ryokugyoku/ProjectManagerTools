@@ -29,6 +29,8 @@ export type WbsTask = {
   parentTaskTitle: string | null;
   prerequisiteTaskId?: number | null;
   prerequisiteTaskTitle?: string | null;
+  prerequisiteTaskIds?: number[];
+  prerequisiteTasks?: Array<{ id: number; title: string }>;
   assigneeId: number | null;
   assigneeName: string | null;
   status: WbsStatus;
@@ -44,7 +46,7 @@ export type WbsTask = {
   todayProgressNote?: string;
   latestDelayReason?: string;
 };
-export type WbsTaskInput = Omit<WbsTask, "id" | "assigneeName" | "projectName" | "parentTaskTitle" | "prerequisiteTaskTitle" | "plannedEnd" | "finalized" | "todayDailyProgress" | "todayProgressNote" | "latestDelayReason"> & {
+export type WbsTaskInput = Omit<WbsTask, "id" | "assigneeName" | "projectName" | "parentTaskTitle" | "prerequisiteTaskTitle" | "prerequisiteTasks" | "plannedEnd" | "finalized" | "todayDailyProgress" | "todayProgressNote" | "latestDelayReason"> & {
   plannedEnd: string;
 };
 export type AppSettings = {
@@ -81,6 +83,7 @@ type WbsTaskRow = {
   today_progress_note: string | null;
   latest_delay_reason: string | null;
 };
+type WbsDependencyRow = { task_id: number; prerequisite_task_id: number; prerequisite_task_title: string };
 type WorkHistoryRow = { id: number; task_id: number; event_type: WorkHistoryType; reason: string; details: string; occurred_at: string };
 type TaskTreeHistoryRow = WorkHistoryRow & { task_title: string; depth: number };
 type AssigneeRow = {
@@ -121,7 +124,20 @@ export async function listWbsTasks(date = localISODate()): Promise<WbsTask[]> {
     LEFT JOIN wbs_progress_logs today_log ON today_log.task_id=w.id AND today_log.log_date=$1
     ORDER BY w.planned_start, w.id
   `, [date]);
-  return deriveParentProgress(rows.map(mapTask));
+  const dependencies = await db.select<WbsDependencyRow[]>(`
+    SELECT dependency.task_id, dependency.prerequisite_task_id,
+      prerequisite.title AS prerequisite_task_title
+    FROM wbs_task_dependencies dependency
+    JOIN wbs_tasks prerequisite ON prerequisite.id=dependency.prerequisite_task_id
+    ORDER BY dependency.task_id, prerequisite.planned_start, prerequisite.id
+  `);
+  const byTask = new Map<number, Array<{ id: number; title: string }>>();
+  for (const dependency of dependencies) {
+    byTask.set(dependency.task_id, [...(byTask.get(dependency.task_id) ?? []), {
+      id: dependency.prerequisite_task_id, title: dependency.prerequisite_task_title,
+    }]);
+  }
+  return deriveParentProgress(rows.map((row) => mapTask(row, byTask.get(row.id) ?? [])));
 }
 
 export async function listDailyProgressSnapshots(date: string): Promise<DailyProgressSnapshot[]> {
@@ -177,13 +193,16 @@ export async function createWbsTask(input: WbsTaskInput): Promise<void> {
   const db = await database();
   await validateProjectAssignment(db, input.projectId, input.assigneeId);
   await validateParentTask(db, null, input.projectId, input.parentTaskId);
-  await validatePrerequisiteTask(db, null, input.projectId, input.parentTaskId, input.prerequisiteTaskId ?? null);
-  await db.execute(`
+  const prerequisiteIds = normalizedPrerequisiteIds(input);
+  await validatePrerequisiteTasks(db, null, input.projectId, input.parentTaskId, prerequisiteIds);
+  const result = await db.execute(`
     INSERT INTO wbs_tasks
       (title, description, project_id, parent_task_id, prerequisite_task_id, assignee_id, status, progress,
        country_code, planned_start, planned_end, business_days, actual_start, actual_end)
     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
   `, taskValues(input));
+  const taskId = Number(result.lastInsertId);
+  await replaceTaskDependencies(db, taskId, prerequisiteIds);
   if (input.parentTaskId !== null) {
     await db.execute("INSERT INTO wbs_work_history (task_id, event_type, details) VALUES ($1, 'created', $2)", [
       input.parentTaskId, `サブタスク「${input.title.trim()}」を追加しました。`,
@@ -196,7 +215,8 @@ export async function updateWbsTask(id: number, input: WbsTaskInput): Promise<vo
   const db = await database();
   await validateProjectAssignment(db, input.projectId, input.assigneeId);
   await validateParentTask(db, id, input.projectId, input.parentTaskId);
-  await validatePrerequisiteTask(db, id, input.projectId, input.parentTaskId, input.prerequisiteTaskId ?? null);
+  const prerequisiteIds = normalizedPrerequisiteIds(input);
+  await validatePrerequisiteTasks(db, id, input.projectId, input.parentTaskId, prerequisiteIds);
   await validateChildProjects(db, id, input.projectId);
   await validateDependentHierarchy(db, id, input.projectId, input.parentTaskId);
   await validateFinalizedFields(db, id, input);
@@ -206,12 +226,14 @@ export async function updateWbsTask(id: number, input: WbsTaskInput): Promise<vo
       planned_start=$10, planned_end=$11, business_days=$12, actual_start=$13, actual_end=$14,
       updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id=$15
   `, [...taskValues(input), id]);
+  await replaceTaskDependencies(db, id, prerequisiteIds);
 }
 
 export async function deleteWbsTask(id: number): Promise<void> {
   const db = await database();
   await db.execute("DELETE FROM wbs_work_history WHERE task_id=$1", [id]);
   await db.execute("DELETE FROM wbs_progress_logs WHERE task_id=$1", [id]);
+  await db.execute("DELETE FROM wbs_task_dependencies WHERE task_id=$1 OR prerequisite_task_id=$1", [id]);
   await db.execute("UPDATE wbs_tasks SET prerequisite_task_id=NULL WHERE prerequisite_task_id=$1", [id]);
   await db.execute("UPDATE wbs_tasks SET parent_task_id=NULL WHERE parent_task_id=$1", [id]);
   await db.execute("DELETE FROM wbs_tasks WHERE id=$1", [id]);
@@ -357,12 +379,16 @@ export async function saveSettings(settings: AppSettings): Promise<void> {
   ]);
 }
 
-function mapTask(row: WbsTaskRow): WbsTask {
+function mapTask(row: WbsTaskRow, dependencies: Array<{ id: number; title: string }>): WbsTask {
+  const effectiveDependencies = dependencies.length > 0
+    ? dependencies
+    : row.prerequisite_task_id === null ? [] : [{ id: row.prerequisite_task_id, title: row.prerequisite_task_title ?? "" }];
   return {
     id: row.id, title: row.title, description: row.description,
     projectId: row.project_id, projectName: row.project_name,
     parentTaskId: row.parent_task_id, parentTaskTitle: row.parent_task_title,
     prerequisiteTaskId: row.prerequisite_task_id, prerequisiteTaskTitle: row.prerequisite_task_title,
+    prerequisiteTaskIds: effectiveDependencies.map((item) => item.id), prerequisiteTasks: effectiveDependencies,
     assigneeId: row.assignee_id, assigneeName: row.assignee_name, status: row.status,
     progress: row.progress, countryCode: row.country_code, plannedStart: row.planned_start,
     plannedEnd: row.planned_end, businessDays: row.business_days,
@@ -380,7 +406,8 @@ function localISODate() {
 }
 
 function taskValues(input: WbsTaskInput): unknown[] {
-  return [input.title.trim(), input.description.trim(), input.projectId, input.parentTaskId, input.prerequisiteTaskId ?? null, input.assigneeId,
+  const firstPrerequisiteId = normalizedPrerequisiteIds(input)[0] ?? null;
+  return [input.title.trim(), input.description.trim(), input.projectId, input.parentTaskId, firstPrerequisiteId, input.assigneeId,
     input.status, input.progress, input.countryCode, input.plannedStart, input.plannedEnd,
     input.businessDays, input.actualStart || null, input.actualEnd || null];
 }
@@ -439,15 +466,15 @@ async function validateChildProjects(db: Database, taskId: number, projectId: nu
   if ((rows[0]?.invalid_children ?? 0) > 0) throw new Error("子タスクがあるタスクは別の案件へ移動できません。");
 }
 
-async function validatePrerequisiteTask(db: Database, taskId: number | null, projectId: number | null, parentTaskId: number | null, prerequisiteTaskId: number | null) {
-  if (prerequisiteTaskId === null) return;
+async function validatePrerequisiteTasks(db: Database, taskId: number | null, projectId: number | null, parentTaskId: number | null, prerequisiteTaskIds: number[]) {
+  for (const prerequisiteTaskId of prerequisiteTaskIds) {
   if (taskId === prerequisiteTaskId) throw new Error("タスク自身を完了前提には設定できません。");
   const rows = await db.select<Array<{ candidate_project_id: number | null; candidate_parent_task_id: number | null; is_cycle: number }>>(`
-    WITH RECURSIVE prerequisite_chain(id, prerequisite_task_id) AS (
-      SELECT id, prerequisite_task_id FROM wbs_tasks WHERE id=$1
+    WITH RECURSIVE prerequisite_chain(id) AS (
+      SELECT prerequisite_task_id FROM wbs_task_dependencies WHERE task_id=$1
       UNION ALL
-      SELECT prerequisite.id, prerequisite.prerequisite_task_id
-      FROM wbs_tasks prerequisite JOIN prerequisite_chain chain ON prerequisite.id=chain.prerequisite_task_id
+      SELECT dependency.prerequisite_task_id
+      FROM wbs_task_dependencies dependency JOIN prerequisite_chain chain ON dependency.task_id=chain.id
     )
     SELECT candidate.project_id AS candidate_project_id,
       candidate.parent_task_id AS candidate_parent_task_id,
@@ -460,14 +487,30 @@ async function validatePrerequisiteTask(db: Database, taskId: number | null, pro
     throw new Error("完了前提は同じ案件・同じ階層のタスクから選択してください。");
   }
   if (candidate.is_cycle === 1) throw new Error("完了前提の依存関係を循環させることはできません。");
+  }
 }
 
 async function validateDependentHierarchy(db: Database, taskId: number, projectId: number | null, parentTaskId: number | null) {
   const rows = await db.select<Array<{ invalid_dependents: number }>>(
-    "SELECT COUNT(*) AS invalid_dependents FROM wbs_tasks WHERE prerequisite_task_id=$1 AND (project_id IS NOT $2 OR parent_task_id IS NOT $3)",
+    `SELECT COUNT(*) AS invalid_dependents FROM wbs_task_dependencies dependency
+      JOIN wbs_tasks dependent ON dependent.id=dependency.task_id
+      WHERE dependency.prerequisite_task_id=$1
+        AND (dependent.project_id IS NOT $2 OR dependent.parent_task_id IS NOT $3)`,
     [taskId, projectId, parentTaskId],
   );
   if ((rows[0]?.invalid_dependents ?? 0) > 0) throw new Error("このタスクを完了前提にしている同階層タスクがあるため、階層または案件を変更できません。");
+}
+
+function normalizedPrerequisiteIds(input: Pick<WbsTaskInput, "prerequisiteTaskIds" | "prerequisiteTaskId">): number[] {
+  const values = input.prerequisiteTaskIds ?? (input.prerequisiteTaskId == null ? [] : [input.prerequisiteTaskId]);
+  return [...new Set(values.filter((value) => Number.isInteger(value)))];
+}
+
+async function replaceTaskDependencies(db: Database, taskId: number, prerequisiteTaskIds: number[]) {
+  await db.execute("DELETE FROM wbs_task_dependencies WHERE task_id=$1", [taskId]);
+  for (const prerequisiteTaskId of prerequisiteTaskIds) {
+    await db.execute("INSERT INTO wbs_task_dependencies (task_id, prerequisite_task_id) VALUES ($1, $2)", [taskId, prerequisiteTaskId]);
+  }
 }
 
 async function validateFinalizedFields(db: Database, taskId: number, input: WbsTaskInput) {

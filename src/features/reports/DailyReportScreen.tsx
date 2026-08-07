@@ -51,7 +51,7 @@ function WorkRecord({ task, snapshot, reportDate, tasks }: { task: WbsTask; snap
   const impact = delayed ? calculateDelayImpact(task, tasks, variance) : null;
   return <li className={`work-record${delayed ? " is-delayed" : ""}`}>
     <header><strong>{task.title}</strong><div>{delayed && <em className="task-delay-badge">{Math.abs(variance).toFixed(1)}営業日遅延</em>}{snapshot.dailyProgress !== null && <span>当日 +{snapshot.dailyProgress}%</span>}</div></header>
-    {task.prerequisiteTaskTitle && <p className="prerequisite-context">完了前提：{task.prerequisiteTaskTitle}</p>}
+    {(task.prerequisiteTasks?.length ?? 0) > 0 ? <p className="prerequisite-context">完了前提：{task.prerequisiteTasks!.map((item) => item.title).join("、")}</p> : task.prerequisiteTaskTitle && <p className="prerequisite-context">完了前提：{task.prerequisiteTaskTitle}</p>}
     <section className="work-report-primary"><b>その日に行った作業</b><p>{snapshot.note || "作業内容のメモはありません。"}</p></section>
     {snapshot.latestHistoryDetails && <section className="latest-work-history"><div><b>最新の作業履歴</b>{snapshot.latestHistoryType && <span>{historyLabels[snapshot.latestHistoryType]}</span>}</div><p>{snapshot.latestHistoryDetails}</p></section>}
     {snapshot.rescheduleReason && <section className="report-reschedule-reason"><b>リスケ理由</b><p>{snapshot.rescheduleReason}</p></section>}

@@ -65,6 +65,12 @@ pub fn run() {
             sql: include_str!("../migrations/0010_add_wbs_prerequisite.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 11,
+            description: "create_wbs_task_dependencies",
+            sql: include_str!("../migrations/0011_create_wbs_task_dependencies.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()

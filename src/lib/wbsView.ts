@@ -170,14 +170,21 @@ export function prerequisiteTaskCandidates(tasks: WbsTask[], projectId: number |
     if (candidate.projectId !== projectId || (candidate.parentTaskId ?? null) !== parentTaskId || candidate.id === currentTaskId) return false;
     if (currentTaskId === null) return true;
     const visited = new Set<number>();
-    let prerequisiteId = candidate.prerequisiteTaskId ?? null;
-    while (prerequisiteId !== null && !visited.has(prerequisiteId)) {
+    const pending = [...dependencyIds(candidate)];
+    while (pending.length > 0) {
+      const prerequisiteId = pending.pop()!;
       if (prerequisiteId === currentTaskId) return false;
+      if (visited.has(prerequisiteId)) continue;
       visited.add(prerequisiteId);
-      prerequisiteId = byId.get(prerequisiteId)?.prerequisiteTaskId ?? null;
+      const prerequisite = byId.get(prerequisiteId);
+      if (prerequisite) pending.push(...dependencyIds(prerequisite));
     }
     return true;
   }).sort((a, b) => a.plannedStart.localeCompare(b.plannedStart) || a.id - b.id);
+}
+
+function dependencyIds(task: WbsTask): number[] {
+  return task.prerequisiteTaskIds ?? (task.prerequisiteTaskId == null ? [] : [task.prerequisiteTaskId]);
 }
 
 export function ancestorTrail(tasks: WbsTask[], taskId: number): WbsTask[] {
