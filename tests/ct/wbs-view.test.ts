@@ -46,7 +46,7 @@ describe("parent task candidate combinations", () => {
 // 因子: WBS日程（なし/短期/長期）、マイルストーン（なし/期間外）、最小表示日数（既定/指定）。
 // どの組み合わせでも全日程を含み、短い期間は横操作に必要な最小幅を確保する。
 describe("timeline date range combinations", () => {
-  const milestone = { id: 1, projectId: 1, projectName: "案件A", projectCode: "A", name: "公開", description: "", dueDate: "2026-10-01", completed: false } satisfies Milestone;
+  const milestone = { id: 1, projectId: 1, projectName: "案件A", projectCode: "A", name: "公開", description: "", dueDate: "2026-10-01", completed: false, color: "amber" } satisfies Milestone;
 
   it.each([
     [[], [], 42, "2026-07-30", "2026-09-09"],

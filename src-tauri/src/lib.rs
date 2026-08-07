@@ -41,6 +41,12 @@ pub fn run() {
             sql: include_str!("../migrations/0006_create_milestones.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 7,
+            description: "add_milestone_color",
+            sql: include_str!("../migrations/0007_add_milestone_color.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()

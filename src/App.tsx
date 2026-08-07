@@ -13,7 +13,7 @@ import { SettingsScreen } from "./features/settings/SettingsScreen";
 import { ProjectsScreen } from "./features/projects/ProjectsScreen";
 import { HomeScreen } from "./features/home/HomeScreen";
 import { listProjects, type Project } from "./lib/projects";
-import { createMilestone, deleteMilestone, listMilestones, updateMilestone, type Milestone, type MilestoneInput } from "./lib/milestones";
+import { createMilestone, deleteMilestone, listMilestones, MILESTONE_COLOR_OPTIONS, updateMilestone, type Milestone, type MilestoneInput } from "./lib/milestones";
 import { MilestonePanel } from "./features/wbs/MilestonePanel";
 import { filterWbsTasks, parentTaskCandidates, summarizeWbsTasks, type WbsFilters, type WbsFilterValue, type WbsGroupBy } from "./lib/wbsView";
 import "./App.css";
@@ -236,7 +236,7 @@ function App() {
 }
 
 function MilestoneModal({ milestone, project, onClose, onSaved, onError }: { milestone: Milestone | null; project: Project; onClose: () => void; onSaved: () => Promise<void>; onError: (value: string | null) => void }) {
-  const [form, setForm] = useState<MilestoneInput>({ projectId: project.id, name: milestone?.name ?? "", description: milestone?.description ?? "", dueDate: milestone?.dueDate ?? formatISODate(new Date()), completed: milestone?.completed ?? false });
+  const [form, setForm] = useState<MilestoneInput>({ projectId: project.id, name: milestone?.name ?? "", description: milestone?.description ?? "", dueDate: milestone?.dueDate ?? formatISODate(new Date()), completed: milestone?.completed ?? false, color: milestone?.color ?? "forest" });
   const [saving, setSaving] = useState(false);
   async function submit(event: FormEvent) {
     event.preventDefault(); setSaving(true);
@@ -254,10 +254,11 @@ function MilestoneModal({ milestone, project, onClose, onSaved, onError }: { mil
       <div className="field-grid">
         <label className="wide">マイルストーン名<input required maxLength={120} value={form.name} onChange={(event) => setForm({ ...form, name: event.currentTarget.value })} placeholder="例：正式リリース" /></label>
         <label className="wide">説明<textarea rows={2} maxLength={1000} value={form.description} onChange={(event) => setForm({ ...form, description: event.currentTarget.value })} placeholder="達成条件や補足" /></label>
+        <fieldset className="milestone-color-picker wide"><legend>列の色</legend><p>ロードマップで節目を識別するための、画面に調和した色です。</p><div className="milestone-color-options">{MILESTONE_COLOR_OPTIONS.map((option) => <label key={option.value} style={{ "--choice-color": option.solid } as React.CSSProperties}><input type="radio" name="milestone-color" value={option.value} checked={form.color === option.value} onChange={() => setForm({ ...form, color: option.value })} /><span className="milestone-color-swatch" aria-hidden="true" /><small>{option.label}</small></label>)}</div></fieldset>
         <label>達成予定日<input required type="date" value={form.dueDate} onChange={(event) => setForm({ ...form, dueDate: event.currentTarget.value })} /></label>
         <label className="milestone-completed"><span>達成状態</span><span><input type="checkbox" checked={form.completed} onChange={(event) => setForm({ ...form, completed: event.currentTarget.checked })} /> 達成済みにする</span></label>
       </div>
-      <div className="modal-actions">{milestone && <button type="button" className="danger-text" disabled={saving} onClick={() => void remove()}>削除</button>}<span className="action-spacer" /><button type="button" className="quiet-button" onClick={onClose}>キャンセル</button><button className="primary-button" disabled={saving || !form.name.trim()}>{saving ? "保存中…" : milestone ? "変更を保存" : "追加する"}</button></div>
+      <div className="modal-actions milestone-actions">{milestone && <button type="button" className="danger-text" disabled={saving} onClick={() => void remove()}>削除</button>}<span className="action-spacer" /><button type="button" className="quiet-button" onClick={onClose}>キャンセル</button><button className="primary-button" disabled={saving || !form.name.trim()}>{saving ? "保存中…" : milestone ? "変更を保存" : "追加する"}</button></div>
     </form>
   </Modal>;
 }

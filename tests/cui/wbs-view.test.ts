@@ -15,7 +15,7 @@ const users: Assignee[] = [
   { id: 21, name: "佐藤", email: "s@example.com", birthday: null, department: "QA", role: "", timezone: "Asia/Tokyo", interests: "", skills: "", workStyle: "", notes: "" },
 ];
 const all: WbsFilters = { query: "", projectId: "all", assigneeId: "all", status: "all" };
-const milestones: Milestone[] = [{ id: 1, projectId: 10, projectName: "新製品", projectCode: "NEW-1", name: "公開", description: "", dueDate: "2026-09-01", completed: false }];
+const milestones: Milestone[] = [{ id: 1, projectId: 10, projectName: "新製品", projectCode: "NEW-1", name: "公開", description: "", dueDate: "2026-09-01", completed: false, color: "forest" }];
 
 describe("WBS view methods", () => {
   it("filters by searchable text, relationship, status, and unset values", () => {

@@ -4,7 +4,7 @@ import {
   parseISODate, shiftBusinessDate,
 } from "../../lib/calendar";
 import type { Project } from "../../lib/projects";
-import type { Milestone } from "../../lib/milestones";
+import { milestoneColorTokens, type Milestone } from "../../lib/milestones";
 import type { Assignee, WbsTask } from "../../lib/wbs";
 import { buildTimelineDateRange, buildTimelineMonths, buildWbsGroups, flattenWbsTaskTree, type WbsGroupBy } from "../../lib/wbsView";
 
@@ -168,14 +168,8 @@ export function TimelineBoard({ tasks, milestones, assignees, projects, groupBy,
         <div className="roadmap-head info-columns"><span>WBS</span><span>状態</span><span>進捗</span></div>
         <div className="roadmap-head date-columns">
           <div className="month-bands">{months.map((month) => <div className="month-band" key={month.key} style={{ width: month.days * DAY_WIDTH }}><span>{month.label}</span></div>)}</div>
-          <div className="day-headings">{dates.map((date) => <DayColumn key={date} date={date} countryCode={countryCode} milestones={milestonesByDate.get(date)} header />)}</div>
+          <div className="day-headings">{dates.map((date) => <DayColumn key={date} date={date} countryCode={countryCode} milestones={milestonesByDate.get(date)} header onSelectMilestone={onSelectMilestone} />)}</div>
         </div>
-        {milestones.length > 0 && <div className="milestone-roadmap-row">
-          <div className="milestone-roadmap-info"><strong>◆ マイルストーン</strong><small>{milestones.length}件 · クリックで詳細</small></div>
-          <div className="milestone-timeline">{dates.map((date) => <DayColumn key={date} date={date} countryCode={countryCode} milestones={milestonesByDate.get(date)} />)}
-            {milestones.map((milestone, index) => <button key={milestone.id} className={`milestone-pin ${milestone.completed ? "completed" : ""}`} style={{ left: dayDifference(range.start, milestone.dueDate) * DAY_WIDTH + DAY_WIDTH / 2, top: 8 + (index % 2) * 28 }} onClick={() => onSelectMilestone(milestone)} title={`${milestone.name} · ${milestone.dueDate}`} aria-label={`${milestone.name}、${milestone.dueDate}、${milestone.completed ? "達成済み" : "予定"}`}><span aria-hidden="true">◆</span><b>{milestone.name}</b><time dateTime={milestone.dueDate}>{formatShortDate(milestone.dueDate)}</time></button>)}
-          </div>
-        </div>}
         {groups.map((group) => <div className="roadmap-group" key={group.key}>
           <div className="group-heading"><span className="avatar">{group.initials}</span><strong>{group.label}</strong><small>{group.detail}</small><span className="group-count">{group.tasks.length}件</span></div>
           {flattenWbsTaskTree(group.tasks).map(({ task, depth }) => {
@@ -203,17 +197,22 @@ export function TimelineBoard({ tasks, milestones, assignees, projects, groupBy,
   </section>;
 }
 
-function DayColumn({ date, countryCode, milestones = [], header = false }: { date: string; countryCode: string; milestones?: Milestone[]; header?: boolean }) {
+function DayColumn({ date, countryCode, milestones = [], header = false, onSelectMilestone }: { date: string; countryCode: string; milestones?: Milestone[]; header?: boolean; onSelectMilestone?: (milestone: Milestone) => void }) {
   const holiday = holidayName(date, countryCode);
   const business = isBusinessDay(date, countryCode);
   const parsed = parseISODate(date);
   const milestoneLabel = milestones.map((milestone) => milestone.name).join("、");
-  return <div className={`timeline-day ${!business ? "off" : ""} ${date === formatISODate(new Date()) ? "current" : ""} ${milestones.length > 0 ? "milestone-column" : ""}`} title={milestoneLabel || holiday || (!business ? "休日" : date)}>
+  const tokens = milestones.length > 0 ? milestoneColorTokens(milestones[0].color) : null;
+  const style = tokens ? { "--milestone-fill": tokens.tint, "--milestone-edge": tokens.edge, "--milestone-solid": tokens.solid } as React.CSSProperties : undefined;
+  return <div className={`timeline-day ${!business ? "off" : ""} ${date === formatISODate(new Date()) ? "current" : ""} ${milestones.length > 0 ? "milestone-column" : ""}`} style={style} title={milestoneLabel || holiday || (!business ? "休日" : date)}>
     {header && <><small>{parsed.toLocaleDateString("ja-JP", { weekday: "short" })}</small><strong>{parsed.getDate()}</strong>{holiday && <i>祝</i>}</>}
-    {header && milestones.length > 0 && <span className="milestone-column-mark" aria-label={`マイルストーン：${milestoneLabel}`}>◆{milestones.length > 1 ? milestones.length : ""}</span>}
+    {header && milestones.length > 0 && <button type="button" className="milestone-column-trigger" onClick={() => onSelectMilestone?.(milestones[0])} aria-label={`マイルストーン：${milestoneLabel}。詳細を開く`}>
+      <span className="milestone-column-mark" aria-hidden="true">◆{milestones.length > 1 ? milestones.length : ""}</span>
+      <span className="milestone-column-tooltip" role="tooltip">{milestones.map((milestone) => <span key={milestone.id}><i style={{ background: milestoneColorTokens(milestone.color).solid }} aria-hidden="true" /><b>{milestone.name}</b><time dateTime={milestone.dueDate}>{formatMilestoneDate(milestone.dueDate)}</time></span>)}</span>
+    </button>}
   </div>;
 }
 
 function dayDifference(from: string, to: string) { return Math.round((parseISODate(to).getTime() - parseISODate(from).getTime()) / 86_400_000); }
 function statusLabel(status: WbsTask["status"]) { return { not_started: "未着手", in_progress: "進行中", completed: "完了", on_hold: "保留" }[status]; }
-function formatShortDate(value: string) { return new Intl.DateTimeFormat("ja-JP", { month: "numeric", day: "numeric" }).format(parseISODate(value)); }
+function formatMilestoneDate(value: string) { return new Intl.DateTimeFormat("ja-JP", { year: "numeric", month: "short", day: "numeric" }).format(parseISODate(value)); }
