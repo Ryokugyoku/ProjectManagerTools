@@ -3,7 +3,9 @@ import {
   addCalendarDays, calculateEndDate, formatISODate, holidayName, isBusinessDay,
   parseISODate, shiftBusinessDate,
 } from "../../lib/calendar";
+import type { Project } from "../../lib/projects";
 import type { Assignee, WbsTask } from "../../lib/wbs";
+import { buildWbsGroups, flattenWbsTaskTree, type WbsGroupBy } from "../../lib/wbsView";
 
 const DAY_WIDTH = 42;
 const VISIBLE_DAYS = 35;
@@ -13,9 +15,11 @@ type DragState = {
   task: WbsTask; mode: "move" | "left" | "right"; startX: number; preview: Schedule;
 };
 
-export function TimelineBoard({ tasks, assignees, countryCode, selectedId, onSelect, onScheduleChange }: {
+export function TimelineBoard({ tasks, assignees, projects, groupBy, countryCode, selectedId, onSelect, onScheduleChange }: {
   tasks: WbsTask[];
   assignees: Assignee[];
+  projects: Project[];
+  groupBy: WbsGroupBy;
   countryCode: string;
   selectedId: number | null;
   onSelect: (task: WbsTask) => void;
@@ -25,12 +29,7 @@ export function TimelineBoard({ tasks, assignees, countryCode, selectedId, onSel
   const [drag, setDrag] = useState<DragState | null>(null);
   const didDrag = useRef(false);
   const dates = useMemo(() => Array.from({ length: VISIBLE_DAYS }, (_, index) => addCalendarDays(rangeStart, index)), [rangeStart]);
-  const groups = useMemo(() => {
-    const result: Array<{ key: string; person: Assignee | null; tasks: WbsTask[] }> = assignees.map((person) => ({ key: String(person.id), person, tasks: tasks.filter((task) => task.assigneeId === person.id) }));
-    const unassigned = tasks.filter((task) => task.assigneeId === null);
-    if (unassigned.length || result.length === 0) result.push({ key: "none", person: null, tasks: unassigned });
-    return result;
-  }, [assignees, tasks]);
+  const groups = useMemo(() => buildWbsGroups(tasks, groupBy, projects, assignees), [assignees, groupBy, projects, tasks]);
 
   useEffect(() => {
     if (!drag) return;
@@ -96,7 +95,7 @@ export function TimelineBoard({ tasks, assignees, countryCode, selectedId, onSel
 
   return <section className="roadmap-card" aria-label="WBSロードマップ">
     <div className="roadmap-toolbar">
-      <div><strong>ロードマップ</strong><span>担当者でグループ化</span></div>
+      <div><strong>ロードマップ</strong><span>{groupBy === "project" ? "案件" : "責任者"}ごとに表示</span></div>
       <div className="range-controls">
         <button aria-label="前の期間" onClick={() => setRangeStart(addCalendarDays(rangeStart, -14))}>‹</button>
         <button onClick={() => setRangeStart(startOfWeek(new Date()))}>今日</button>
@@ -110,13 +109,13 @@ export function TimelineBoard({ tasks, assignees, countryCode, selectedId, onSel
           {dates.map((date) => <DayColumn key={date} date={date} countryCode={countryCode} header />)}
         </div>
         {groups.map((group) => <div className="roadmap-group" key={group.key}>
-          <div className="group-heading"><span className="avatar">{group.person ? initials(group.person.name) : "–"}</span><strong>{group.person?.name ?? "未割当"}</strong><small>{group.tasks.length} items</small></div>
-          {group.tasks.length === 0 ? <div className="empty-group">WBSはありません</div> : group.tasks.map((task) => {
+          <div className="group-heading"><span className="avatar">{group.initials}</span><strong>{group.label}</strong><small>{group.detail}</small><span className="group-count">{group.tasks.length}件</span></div>
+          {flattenWbsTaskTree(group.tasks).map(({ task, depth }) => {
             const schedule = drag?.task.id === task.id ? drag.preview : task;
             const left = dayDifference(rangeStart, schedule.plannedStart) * DAY_WIDTH;
             const width = Math.max(DAY_WIDTH, (dayDifference(schedule.plannedStart, schedule.plannedEnd) + 1) * DAY_WIDTH);
             return <div className={`roadmap-row ${selectedId === task.id ? "selected" : ""}`} key={task.id}>
-              <button className="task-info" onClick={() => onSelect(task)}><strong>{task.title}</strong><small>{task.projectName ?? "案件未設定"} · {task.assigneeName ?? "未割当"}</small></button>
+              <button className="task-info" style={{ "--task-depth": depth } as React.CSSProperties} onClick={() => onSelect(task)}><strong>{depth > 0 && <span className="task-branch" aria-hidden="true">↳</span>}{task.title}</strong><small>{task.parentTaskTitle ? `親: ${task.parentTaskTitle} · ` : ""}{task.assigneeName ?? "責任者未設定"}</small></button>
               <span className={`status-cell ${task.status}`}>{statusLabel(task.status)}</span>
               <span className="progress-cell">{task.progress}%</span>
               <div className="timeline-cells">{dates.map((date) => <DayColumn key={date} date={date} countryCode={countryCode} />)}
@@ -150,5 +149,4 @@ function startOfWeek(date: Date) {
   return formatISODate(copy);
 }
 function dayDifference(from: string, to: string) { return Math.round((parseISODate(to).getTime() - parseISODate(from).getTime()) / 86_400_000); }
-function initials(name: string) { return name.trim().slice(0, 2).toUpperCase(); }
 function statusLabel(status: WbsTask["status"]) { return { not_started: "未着手", in_progress: "進行中", completed: "完了", on_hold: "保留" }[status]; }

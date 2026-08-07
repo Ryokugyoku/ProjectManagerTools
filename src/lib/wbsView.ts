@@ -1,0 +1,131 @@
+import type { Project } from "./projects";
+import type { Assignee, WbsStatus, WbsTask } from "./wbs";
+
+export type WbsGroupBy = "project" | "assignee";
+export type WbsFilterValue = "all" | "unset" | number;
+export type WbsFilters = {
+  query: string;
+  projectId: WbsFilterValue;
+  assigneeId: WbsFilterValue;
+  status: "all" | WbsStatus;
+};
+
+export type WbsGroup = {
+  key: string;
+  label: string;
+  detail: string;
+  initials: string;
+  tasks: WbsTask[];
+};
+
+export type WbsTreeItem = { task: WbsTask; depth: number };
+
+export function filterWbsTasks(tasks: WbsTask[], filters: WbsFilters): WbsTask[] {
+  const query = filters.query.trim().toLocaleLowerCase("ja-JP");
+  return tasks.filter((task) => {
+    const searchable = [task.title, task.description, task.projectName ?? "", task.assigneeName ?? ""]
+      .join(" ")
+      .toLocaleLowerCase("ja-JP");
+    return (!query || searchable.includes(query))
+      && matchesId(task.projectId, filters.projectId)
+      && matchesId(task.assigneeId, filters.assigneeId)
+      && (filters.status === "all" || task.status === filters.status);
+  });
+}
+
+export function summarizeWbsTasks(tasks: WbsTask[], today: string) {
+  const open = tasks.filter((task) => task.status !== "completed");
+  return {
+    total: tasks.length,
+    open: open.length,
+    overdue: open.filter((task) => task.plannedEnd < today).length,
+    unassigned: tasks.filter((task) => task.projectId === null || task.assigneeId === null).length,
+    averageProgress: tasks.length
+      ? Math.round(tasks.reduce((sum, task) => sum + task.progress, 0) / tasks.length)
+      : 0,
+  };
+}
+
+export function buildWbsGroups(
+  tasks: WbsTask[],
+  groupBy: WbsGroupBy,
+  projects: Project[],
+  assignees: Assignee[],
+): WbsGroup[] {
+  const definitions = groupBy === "project"
+    ? projects.map((project) => ({
+      id: project.id,
+      label: project.name,
+      detail: `${project.code} · ${project.members.length}人`,
+    }))
+    : assignees.map((person) => ({
+      id: person.id,
+      label: person.name,
+      detail: person.role || person.department || "役割未設定",
+    }));
+  const idFor = (task: WbsTask) => groupBy === "project" ? task.projectId : task.assigneeId;
+  const groups = definitions.map((definition) => ({
+    key: `${groupBy}-${definition.id}`,
+    label: definition.label,
+    detail: definition.detail,
+    initials: initials(definition.label),
+    tasks: flattenWbsTaskTree(tasks.filter((task) => idFor(task) === definition.id)).map((item) => item.task),
+  })).filter((group) => group.tasks.length > 0);
+  const unset = tasks.filter((task) => idFor(task) === null);
+  if (unset.length > 0) {
+    groups.push({
+      key: `${groupBy}-unset`,
+      label: groupBy === "project" ? "案件未設定" : "責任者未設定",
+      detail: groupBy === "project" ? "案件との紐づけが必要です" : "責任者の設定が必要です",
+      initials: "–",
+      tasks: unset,
+    });
+  }
+  return groups;
+}
+
+export function flattenWbsTaskTree(tasks: WbsTask[]): WbsTreeItem[] {
+  const taskIds = new Set(tasks.map((task) => task.id));
+  const children = new Map<number | null, WbsTask[]>();
+  for (const task of tasks) {
+    const parentId = task.parentTaskId !== null && taskIds.has(task.parentTaskId) ? task.parentTaskId : null;
+    children.set(parentId, [...(children.get(parentId) ?? []), task]);
+  }
+  const result: WbsTreeItem[] = [];
+  const visited = new Set<number>();
+  function append(task: WbsTask, depth: number) {
+    if (visited.has(task.id)) return;
+    visited.add(task.id);
+    result.push({ task, depth });
+    for (const child of children.get(task.id) ?? []) append(child, depth + 1);
+  }
+  for (const root of children.get(null) ?? []) append(root, 0);
+  for (const task of tasks) append(task, 0);
+  return result;
+}
+
+export function parentTaskCandidates(tasks: WbsTask[], projectId: number | null, currentTaskId: number | null): WbsTask[] {
+  if (projectId === null) return [];
+  const excluded = new Set<number>();
+  if (currentTaskId !== null) {
+    const pending = [currentTaskId];
+    while (pending.length > 0) {
+      const id = pending.pop()!;
+      if (excluded.has(id)) continue;
+      excluded.add(id);
+      for (const task of tasks) if (task.parentTaskId === id) pending.push(task.id);
+    }
+  }
+  return flattenWbsTaskTree(tasks.filter((task) => task.projectId === projectId && !excluded.has(task.id)))
+    .map((item) => item.task);
+}
+
+function matchesId(actual: number | null, filter: WbsFilterValue) {
+  if (filter === "all") return true;
+  if (filter === "unset") return actual === null;
+  return actual === filter;
+}
+
+function initials(name: string) {
+  return name.trim().slice(0, 2).toUpperCase();
+}

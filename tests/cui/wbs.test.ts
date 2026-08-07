@@ -10,7 +10,7 @@ import {
 } from "../../src/lib/wbs";
 
 const task: WbsTaskInput = {
-  title: " 設計 ", description: " 詳細 ", projectId: null, assigneeId: null,
+  title: " 設計 ", description: " 詳細 ", projectId: null, parentTaskId: null, assigneeId: null,
   status: "not_started", progress: 0, countryCode: "JP", plannedStart: "2026-08-06",
   plannedEnd: "2026-08-13", businessDays: 5, actualStart: null, actualEnd: null,
 };
@@ -24,8 +24,8 @@ beforeEach(() => { db.select.mockReset(); db.execute.mockReset(); db.execute.moc
 
 describe("WBS data methods", () => {
   it("maps WBS rows including project and assignee", async () => {
-    db.select.mockResolvedValue([{ id: 1, title: "設計", description: "", project_id: 2, project_name: "案件", assignee_id: 3, assignee_name: "山田", status: "in_progress", progress: 40, country_code: "JP", planned_start: "2026-08-06", planned_end: "2026-08-13", business_days: 5, actual_start: "2026-08-06", actual_end: null }]);
-    expect(await listWbsTasks()).toEqual([{ id: 1, title: "設計", description: "", projectId: 2, projectName: "案件", assigneeId: 3, assigneeName: "山田", status: "in_progress", progress: 40, countryCode: "JP", plannedStart: "2026-08-06", plannedEnd: "2026-08-13", businessDays: 5, actualStart: "2026-08-06", actualEnd: null }]);
+    db.select.mockResolvedValue([{ id: 1, title: "設計", description: "", project_id: 2, project_name: "案件", parent_task_id: 5, parent_task_title: "要件定義", assignee_id: 3, assignee_name: "山田", status: "in_progress", progress: 40, country_code: "JP", planned_start: "2026-08-06", planned_end: "2026-08-13", business_days: 5, actual_start: "2026-08-06", actual_end: null }]);
+    expect(await listWbsTasks()).toEqual([{ id: 1, title: "設計", description: "", projectId: 2, projectName: "案件", parentTaskId: 5, parentTaskTitle: "要件定義", assigneeId: 3, assigneeName: "山田", status: "in_progress", progress: 40, countryCode: "JP", plannedStart: "2026-08-06", plannedEnd: "2026-08-13", businessDays: 5, actualStart: "2026-08-06", actualEnd: null }]);
   });
 
   it("creates an unassigned WBS and trims text", async () => {
@@ -34,24 +34,45 @@ describe("WBS data methods", () => {
   });
 
   it("creates and updates a WBS only when the assignee belongs to the project", async () => {
-    db.select.mockResolvedValue([{ count: 1 }]);
+    db.select.mockResolvedValueOnce([{ count: 1 }]);
     await createWbsTask({ ...task, projectId: 4, assigneeId: 8 });
+    db.select.mockResolvedValueOnce([{ count: 1 }]).mockResolvedValueOnce([{ invalid_children: 0 }]);
     await updateWbsTask(9, { ...task, projectId: 4, assigneeId: 8 });
-    expect(db.select).toHaveBeenCalledTimes(2);
+    expect(db.select).toHaveBeenCalledTimes(3);
     expect(db.execute).toHaveBeenCalledTimes(2);
   });
 
+  it("creates a child task only when its parent belongs to the same project", async () => {
+    db.select.mockResolvedValue([{ parent_project_id: 4, is_descendant: 0 }]);
+    await createWbsTask({ ...task, projectId: 4, parentTaskId: 7 });
+    expect(db.execute).toHaveBeenCalledWith(expect.stringContaining("parent_task_id"), expect.arrayContaining([4, 7]));
+
+    db.select.mockResolvedValue([{ parent_project_id: 5, is_descendant: 0 }]);
+    await expect(createWbsTask({ ...task, projectId: 4, parentTaskId: 7 })).rejects.toThrow("同じ案件");
+  });
+
+  it("rejects self-parenting and descendant-parent cycles", async () => {
+    await expect(updateWbsTask(7, { ...task, projectId: 4, parentTaskId: 7 })).rejects.toThrow("自身");
+    db.select.mockResolvedValue([{ parent_project_id: 4, is_descendant: 1 }]);
+    await expect(updateWbsTask(7, { ...task, projectId: 4, parentTaskId: 9 })).rejects.toThrow("子孫");
+  });
+
+  it("rejects moving a task away from children in another project", async () => {
+    db.select.mockResolvedValue([{ invalid_children: 1 }]);
+    await expect(updateWbsTask(7, { ...task, projectId: 4 })).rejects.toThrow("子タスク");
+  });
+
   it("rejects invalid WBS input and an out-of-project assignee", async () => {
-    await expect(createWbsTask({ ...task, title: "" })).rejects.toThrow("WBS名");
+    await expect(createWbsTask({ ...task, title: "" })).rejects.toThrow("タスク名");
     await expect(createWbsTask({ ...task, plannedStart: "" })).rejects.toThrow("予定日");
     await expect(createWbsTask({ ...task, businessDays: 0 })).rejects.toThrow("1日以上");
     db.select.mockResolvedValue([{ count: 0 }]);
     await expect(updateWbsTask(1, { ...task, projectId: 4, assigneeId: 9 })).rejects.toThrow("案件のメンバー");
   });
 
-  it("deletes progress logs before deleting a WBS", async () => {
+  it("detaches child tasks between deleting progress logs and the task", async () => {
     await deleteWbsTask(7);
-    expect(db.execute.mock.calls.map((call) => call[0])).toEqual([expect.stringContaining("wbs_progress_logs"), expect.stringContaining("wbs_tasks")]);
+    expect(db.execute.mock.calls.map((call) => call[0])).toEqual([expect.stringContaining("wbs_progress_logs"), expect.stringContaining("parent_task_id=NULL"), expect.stringContaining("DELETE FROM wbs_tasks")]);
   });
 
   it("upserts daily progress and updates the WBS", async () => {
