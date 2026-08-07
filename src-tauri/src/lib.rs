@@ -47,6 +47,12 @@ pub fn run() {
             sql: include_str!("../migrations/0007_add_milestone_color.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 8,
+            description: "add_wbs_governance",
+            sql: include_str!("../migrations/0008_add_wbs_governance.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()

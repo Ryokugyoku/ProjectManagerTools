@@ -5,7 +5,7 @@ import type { WbsTask } from "../../src/lib/wbs";
 
 // 因子: 案件（全件/指定/未設定）、責任者（全員/指定/未設定）、状態（全て/指定）。
 // 水準を直交的に組み合わせ、すべての有効なフィルターがAND条件として保たれることを確認する。
-const base: WbsTask = { id: 1, title: "設計", description: "", projectId: 1, projectName: "案件A", parentTaskId: null, parentTaskTitle: null, assigneeId: 2, assigneeName: "山田", status: "in_progress", progress: 30, countryCode: "JP", plannedStart: "2026-08-06", plannedEnd: "2026-08-07", businessDays: 2, actualStart: null, actualEnd: null };
+const base: WbsTask = { id: 1, title: "設計", description: "", projectId: 1, projectName: "案件A", parentTaskId: null, parentTaskTitle: null, assigneeId: 2, assigneeName: "山田", status: "in_progress", progress: 30, countryCode: "JP", plannedStart: "2026-08-06", plannedEnd: "2026-08-07", businessDays: 2, actualStart: null, actualEnd: null, finalized: false };
 const tasks = [base, { ...base, id: 2, projectId: null, projectName: null }, { ...base, id: 3, assigneeId: null, assigneeName: null }, { ...base, id: 4, status: "completed" as const }];
 const cases: Array<{ filters: WbsFilters; ids: number[] }> = [
   { filters: { query: "", projectId: "all", assigneeId: "all", status: "all" }, ids: [1, 2, 3, 4] },

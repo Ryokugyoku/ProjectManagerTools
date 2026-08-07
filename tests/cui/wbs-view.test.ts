@@ -5,9 +5,9 @@ import type { Project } from "../../src/lib/projects";
 import type { Assignee, WbsTask } from "../../src/lib/wbs";
 
 const tasks: WbsTask[] = [
-  { id: 1, title: "要件レビュー", description: "顧客確認", projectId: 10, projectName: "新製品", parentTaskId: null, parentTaskTitle: null, assigneeId: 20, assigneeName: "山田", status: "in_progress", progress: 40, countryCode: "JP", plannedStart: "2026-08-01", plannedEnd: "2026-08-05", businessDays: 3, actualStart: null, actualEnd: null },
-  { id: 2, title: "UI実装", description: "画面", projectId: 10, projectName: "新製品", parentTaskId: 1, parentTaskTitle: "要件レビュー", assigneeId: null, assigneeName: null, status: "not_started", progress: 0, countryCode: "JP", plannedStart: "2026-08-06", plannedEnd: "2026-08-12", businessDays: 5, actualStart: null, actualEnd: null },
-  { id: 3, title: "運用確認", description: "", projectId: null, projectName: null, parentTaskId: null, parentTaskTitle: null, assigneeId: 21, assigneeName: "佐藤", status: "completed", progress: 100, countryCode: "JP", plannedStart: "2026-07-01", plannedEnd: "2026-07-02", businessDays: 2, actualStart: null, actualEnd: "2026-07-02" },
+  { id: 1, title: "要件レビュー", description: "顧客確認", projectId: 10, projectName: "新製品", parentTaskId: null, parentTaskTitle: null, assigneeId: 20, assigneeName: "山田", status: "in_progress", progress: 40, countryCode: "JP", plannedStart: "2026-08-01", plannedEnd: "2026-08-05", businessDays: 3, actualStart: null, actualEnd: null, finalized: true },
+  { id: 2, title: "UI実装", description: "画面", projectId: 10, projectName: "新製品", parentTaskId: 1, parentTaskTitle: "要件レビュー", assigneeId: null, assigneeName: null, status: "not_started", progress: 0, countryCode: "JP", plannedStart: "2026-08-06", plannedEnd: "2026-08-12", businessDays: 5, actualStart: null, actualEnd: null, finalized: false },
+  { id: 3, title: "運用確認", description: "", projectId: null, projectName: null, parentTaskId: null, parentTaskTitle: null, assigneeId: 21, assigneeName: "佐藤", status: "completed", progress: 100, countryCode: "JP", plannedStart: "2026-07-01", plannedEnd: "2026-07-02", businessDays: 2, actualStart: null, actualEnd: "2026-07-02", finalized: true },
 ];
 const projects: Project[] = [{ id: 10, name: "新製品", code: "NEW-1", clientName: "", description: "", status: "active", priority: "high", plannedStart: null, plannedEnd: null, members: [{ userId: 20, name: "山田", email: "y@example.com", projectRole: "PM" }] }];
 const users: Assignee[] = [
@@ -26,7 +26,7 @@ describe("WBS view methods", () => {
   });
 
   it("summarizes visible work without treating completed work as overdue", () => {
-    expect(summarizeWbsTasks(tasks, "2026-08-06")).toEqual({ total: 3, open: 2, overdue: 1, unassigned: 2, averageProgress: 47 });
+    expect(summarizeWbsTasks(tasks, "2026-08-06")).toEqual({ total: 3, open: 2, overdue: 1, delayed: 1, unassigned: 2, averageProgress: 47 });
     expect(summarizeWbsTasks([], "2026-08-06").averageProgress).toBe(0);
   });
 

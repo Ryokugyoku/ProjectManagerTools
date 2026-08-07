@@ -2,6 +2,7 @@ import type { Project } from "./projects";
 import { addCalendarDays, parseISODate } from "./calendar";
 import type { Milestone } from "./milestones";
 import type { Assignee, WbsStatus, WbsTask } from "./wbs";
+import { isTaskDelayed } from "./wbsPlanning";
 
 export type WbsGroupBy = "project" | "assignee";
 export type WbsFilterValue = "all" | "unset" | number;
@@ -80,6 +81,7 @@ export function summarizeWbsTasks(tasks: WbsTask[], today: string) {
     total: tasks.length,
     open: open.length,
     overdue: open.filter((task) => task.plannedEnd < today).length,
+    delayed: open.filter((task) => isTaskDelayed(task, today)).length,
     unassigned: tasks.filter((task) => task.projectId === null || task.assigneeId === null).length,
     averageProgress: tasks.length
       ? Math.round(tasks.reduce((sum, task) => sum + task.progress, 0) / tasks.length)

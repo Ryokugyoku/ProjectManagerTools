@@ -2,6 +2,7 @@ import type { Project } from "../../lib/projects";
 import type { Assignee, WbsTask } from "../../lib/wbs";
 import { summarizeWbsTasks } from "../../lib/wbsView";
 import { formatISODate } from "../../lib/calendar";
+import { expectedProgress, isTaskDelayed } from "../../lib/wbsPlanning";
 
 type Destination = "wbs" | "projects" | "users";
 
@@ -14,8 +15,9 @@ export function HomeScreen({ tasks, projects, users, loading, onNavigate, onOpen
   onOpenTask: (task: WbsTask) => void;
 }) {
   const summary = summarizeWbsTasks(tasks, formatISODate(new Date()));
+  const today = formatISODate(new Date());
   const attention = tasks
-    .filter((task) => task.status !== "completed" && (task.plannedEnd < formatISODate(new Date()) || task.projectId === null || task.assigneeId === null))
+    .filter((task) => task.status !== "completed" && (isTaskDelayed(task, today) || task.plannedEnd < today || task.projectId === null || task.assigneeId === null))
     .sort((left, right) => left.plannedEnd.localeCompare(right.plannedEnd))
     .slice(0, 5);
 
@@ -29,12 +31,12 @@ export function HomeScreen({ tasks, projects, users, loading, onNavigate, onOpen
         <button onClick={() => onNavigate("projects")}><span>進行中の案件</span><strong>{projects.filter((project) => project.status === "active").length}</strong><small>全{projects.length}件の案件を確認</small></button>
         <button onClick={() => onNavigate("users")}><span>登録ユーザー</span><strong>{users.length}</strong><small>体制とプロフィールを確認</small></button>
         <button onClick={() => onNavigate("wbs")}><span>未完了WBS</span><strong>{summary.open}</strong><small>平均進捗 {summary.averageProgress}%</small></button>
-        <button className={summary.overdue > 0 ? "attention" : ""} onClick={() => onNavigate("wbs")}><span>期限超過</span><strong>{summary.overdue}</strong><small>{summary.overdue > 0 ? "優先して確認が必要" : "期限内に進行中"}</small></button>
+        <button className={summary.delayed > 0 ? "attention" : ""} onClick={() => onNavigate("wbs")}><span>進捗遅延</span><strong>{summary.delayed}</strong><small>{summary.delayed > 0 ? "計画進捗を下回っています" : "計画どおりに進行中"}</small></button>
       </section>
       <div className="home-content">
         <section className="home-panel attention-panel">
           <div className="home-panel-title"><div><p className="eyebrow">NEEDS ATTENTION</p><h2>確認が必要なWBS</h2></div><button onClick={() => onNavigate("wbs")}>すべて表示</button></div>
-          {attention.length === 0 ? <div className="home-empty"><strong>現在、要確認のWBSはありません</strong><span>期限超過や紐づけ未設定のWBSがここに表示されます。</span></div> : <div className="attention-list">{attention.map((task) => <button key={task.id} onClick={() => onOpenTask(task)}><span className="attention-state">{task.plannedEnd < formatISODate(new Date()) ? "期限超過" : "紐づけ未設定"}</span><span><strong>{task.title}</strong><small>{task.projectName ?? "案件未設定"} · {task.assigneeName ?? "責任者未設定"}</small></span><time>{task.plannedEnd}</time></button>)}</div>}
+          {attention.length === 0 ? <div className="home-empty"><strong>現在、要確認のWBSはありません</strong><span>進捗遅延、期限超過、紐づけ未設定のWBSがここに表示されます。</span></div> : <div className="attention-list">{attention.map((task) => { const delayed = isTaskDelayed(task, today); return <button key={task.id} onClick={() => onOpenTask(task)}><span className="attention-state">{delayed ? "進捗遅延" : task.plannedEnd < today ? "期限超過" : "紐づけ未設定"}</span><span><strong>{task.title}</strong><small>{delayed ? `実績 ${task.progress}% / 計画 ${expectedProgress(task, today)}%` : `${task.projectName ?? "案件未設定"} · ${task.assigneeName ?? "責任者未設定"}`}</small></span><time>{task.plannedEnd}</time></button>; })}</div>}
         </section>
         <section className="home-panel start-panel">
           <div><p className="eyebrow">QUICK START</p><h2>作業を始める</h2></div>

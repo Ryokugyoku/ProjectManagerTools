@@ -16,7 +16,7 @@ type DragState = {
 };
 type ContextMenuState = { task: WbsTask; x: number; y: number };
 
-export function TimelineBoard({ tasks, milestones, assignees, projects, groupBy, countryCode, selectedId, onSelect, onCreateSubtask, onSelectMilestone, onScheduleChange }: {
+export function TimelineBoard({ tasks, milestones, assignees, projects, groupBy, countryCode, selectedId, onSelect, onCreateSubtask, onShowHistory, onRecordProgress, onSelectMilestone, onScheduleChange }: {
   tasks: WbsTask[];
   milestones: Milestone[];
   assignees: Assignee[];
@@ -26,6 +26,8 @@ export function TimelineBoard({ tasks, milestones, assignees, projects, groupBy,
   selectedId: number | null;
   onSelect: (task: WbsTask) => void;
   onCreateSubtask: (task: WbsTask) => void;
+  onShowHistory: (task: WbsTask) => void;
+  onRecordProgress: (task: WbsTask) => void;
   onSelectMilestone: (milestone: Milestone) => void;
   onScheduleChange: (task: WbsTask, schedule: Schedule) => Promise<void>;
 }) {
@@ -72,7 +74,7 @@ export function TimelineBoard({ tasks, milestones, assignees, projects, groupBy,
     setContextMenu({
       task,
       x: Math.min(sourceX, window.innerWidth - 220),
-      y: Math.min(sourceY, window.innerHeight - 72),
+      y: Math.min(sourceY, window.innerHeight - 140),
     });
   }
 
@@ -177,7 +179,7 @@ export function TimelineBoard({ tasks, milestones, assignees, projects, groupBy,
             const left = dayDifference(range.start, schedule.plannedStart) * DAY_WIDTH;
             const width = Math.max(DAY_WIDTH, (dayDifference(schedule.plannedStart, schedule.plannedEnd) + 1) * DAY_WIDTH);
             return <div className={`roadmap-row ${selectedId === task.id ? "selected" : ""}`} key={task.id} onContextMenu={(event) => openContextMenu(event, task)} onKeyDown={(event) => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) openContextMenu(event, task); }}>
-              <button className="task-info" style={{ "--task-depth": depth } as React.CSSProperties} onClick={() => onSelect(task)}><strong>{depth > 0 && <span className="task-branch" aria-hidden="true">↳</span>}{task.title}</strong><small>{task.parentTaskTitle ? `親: ${task.parentTaskTitle} · ` : ""}{task.assigneeName ?? "責任者未設定"}</small></button>
+              <button className="task-info" style={{ "--task-depth": depth } as React.CSSProperties} onClick={() => onSelect(task)}><strong>{depth > 0 && <span className="task-branch" aria-hidden="true">↳</span>}{task.title}</strong><small>{task.finalized ? "確定" : "編集中"} · {task.parentTaskTitle ? `親: ${task.parentTaskTitle} · ` : ""}{task.assigneeName ?? "責任者未設定"}</small></button>
               <span className={`status-cell ${task.status}`}>{statusLabel(task.status)}</span>
               <span className="progress-cell">{task.progress}%</span>
               <div className="timeline-cells">{dates.map((date) => <DayColumn key={date} date={date} countryCode={countryCode} milestones={milestonesByDate.get(date)} />)}
@@ -193,7 +195,11 @@ export function TimelineBoard({ tasks, milestones, assignees, projects, groupBy,
       </div>
     </div>
     <div className="roadmap-help"><strong>横にスクロールして期間を確認</strong><span>中央をドラッグ：開始日を移動</span><span>左右端をドラッグ：営業日数を変更</span><span>← → キーでも調整可能</span></div>
-    {contextMenu && <div className="task-context-menu" ref={contextMenuRef} role="menu" aria-label={`${contextMenu.task.title}の操作`} style={{ left: contextMenu.x, top: contextMenu.y }}><button role="menuitem" onClick={() => { const task = contextMenu.task; setContextMenu(null); onCreateSubtask(task); }}>＋ サブタスクを追加</button></div>}
+    {contextMenu && <div className="task-context-menu" ref={contextMenuRef} role="menu" aria-label={`${contextMenu.task.title}の操作`} style={{ left: contextMenu.x, top: contextMenu.y }}>
+      <button role="menuitem" onClick={() => { const task = contextMenu.task; setContextMenu(null); onRecordProgress(task); }}>今日進んだ進捗を入力</button>
+      <button role="menuitem" onClick={() => { const task = contextMenu.task; setContextMenu(null); onShowHistory(task); }}>作業経緯を表示</button>
+      <button role="menuitem" onClick={() => { const task = contextMenu.task; setContextMenu(null); onCreateSubtask(task); }}>＋ サブタスクを追加</button>
+    </div>}
   </section>;
 }
 
