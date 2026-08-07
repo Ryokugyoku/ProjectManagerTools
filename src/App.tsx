@@ -2,9 +2,9 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { isPermissionGranted, sendNotification } from "@tauri-apps/plugin-notification";
 import { calculateEndDate, countries, formatISODate } from "./lib/calendar";
 import {
-  createWbsTask, deleteWbsTask, getSettings, listAssignees, listWbsTasks,
+  createWbsTask, deleteWbsTask, getSettings, listAssignees, listDailyProgressSnapshots, listWbsTasks,
   finalizeWbsTask, listTaskTreeHistory, saveDailyProgress, saveScheduleChanges, saveSettings, updateWbsTask,
-  type AppSettings, type Assignee, type TaskTreeHistoryEntry, type WbsStatus, type WbsTask, type WorkHistoryEntry,
+  type AppSettings, type Assignee, type DailyProgressSnapshot, type TaskTreeHistoryEntry, type WbsStatus, type WbsTask, type WorkHistoryEntry,
 } from "./lib/wbs";
 import { buildScheduleCascade, buildScheduleCascadeForNewChild, expectedProgress, scheduleChangesRequireReason, type ScheduleChange, type TaskSchedule } from "./lib/wbsPlanning";
 import { TimelineBoard } from "./features/wbs/TimelineBoard";
@@ -14,13 +14,15 @@ import { UsersScreen } from "./features/users/UsersScreen";
 import { SettingsScreen } from "./features/settings/SettingsScreen";
 import { ProjectsScreen } from "./features/projects/ProjectsScreen";
 import { HomeScreen } from "./features/home/HomeScreen";
+import { DailyReportScreen } from "./features/reports/DailyReportScreen";
+import { previousBusinessDate } from "./lib/dailyReport";
 import { listProjects, type Project } from "./lib/projects";
 import { createMilestone, deleteMilestone, listMilestones, MILESTONE_COLOR_OPTIONS, updateMilestone, type Milestone, type MilestoneInput } from "./lib/milestones";
 import { MilestonePanel } from "./features/wbs/MilestonePanel";
 import { dailyProgressActionLabel, filterWbsTasks, parentTaskCandidates, summarizeWbsTasks, type WbsFilters, type WbsFilterValue, type WbsGroupBy } from "./lib/wbsView";
 import "./App.css";
 
-type View = "home" | "wbs" | "projects" | "users" | "settings";
+type View = "home" | "wbs" | "reports" | "projects" | "users" | "settings";
 type WbsRoadmapMode = "select" | "all" | "project";
 
 const statusLabels: Record<WbsStatus, string> = {
@@ -40,6 +42,8 @@ function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [milestones, setMilestones] = useState<Milestone[]>([]);
   const [settings, setSettings] = useState<AppSettings>(emptySettings);
+  const [reportSnapshots, setReportSnapshots] = useState<DailyProgressSnapshot[]>([]);
+  const [reportLoading, setReportLoading] = useState(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [selectedRoadmapProjectId, setSelectedRoadmapProjectId] = useState<number | null>(null);
   const [roadmapMode, setRoadmapMode] = useState<WbsRoadmapMode>("select");
@@ -74,6 +78,18 @@ function App() {
   }, [currentDate]);
 
   useEffect(() => { void refresh(); }, [refresh]);
+
+  const reportDate = previousBusinessDate(currentDate, settings.countryCode);
+  useEffect(() => {
+    if (view !== "reports") return;
+    let active = true;
+    setReportLoading(true);
+    void listDailyProgressSnapshots(reportDate)
+      .then((records) => { if (active) { setReportSnapshots(records); setError(null); } })
+      .catch((cause) => { if (active) setError(toMessage(cause)); })
+      .finally(() => { if (active) setReportLoading(false); });
+    return () => { active = false; };
+  }, [reportDate, view]);
 
   useEffect(() => {
     const updateDate = () => setCurrentDate(formatISODate(new Date()));
@@ -183,6 +199,9 @@ function App() {
         <button className={view === "wbs" ? "active" : ""} onClick={openWbsProjectSelection} aria-label="WBS">
           <span aria-hidden="true">▦</span><small>WBS</small>
         </button>
+        <button className={view === "reports" ? "active" : ""} onClick={() => setView("reports")} aria-label="作業報告">
+          <span aria-hidden="true">◷</span><small>報告</small>
+        </button>
         <button className={view === "projects" ? "active" : ""} onClick={() => setView("projects")} aria-label="案件">
           <span aria-hidden="true">◇</span><small>案件</small>
         </button>
@@ -198,6 +217,8 @@ function App() {
 
       {view === "home" ? (
         <HomeScreen tasks={tasks} projects={projects} users={assignees} loading={loading} onNavigate={(nextView) => nextView === "wbs" ? openWbsProjectSelection() : setView(nextView)} onOpenTask={(task) => { setRoadmapMode(task.projectId === null ? "all" : "project"); setSelectedRoadmapProjectId(task.projectId); setFilters({ query: "", projectId: task.projectId ?? "all", assigneeId: "all", status: "all" }); setSelectedId(task.id); setView("wbs"); }} />
+      ) : view === "reports" ? (
+        <DailyReportScreen projects={projects} tasks={tasks} snapshots={reportSnapshots} reportDate={reportDate} loading={loading || reportLoading} />
       ) : view === "users" ? (
         <UsersScreen users={assignees} onChanged={refresh} onError={setError} />
       ) : view === "projects" ? (
@@ -382,7 +403,7 @@ function FormFields({ form, setForm, projects, assignees, tasks, currentTaskId, 
   const availableParents = parentTaskCandidates(tasks, form.projectId, currentTaskId);
   return <div className="field-grid">
     <label className="wide">タスク名<input value={form.title} maxLength={120} required onChange={(e) => setForm({ ...form, title: e.currentTarget.value })} placeholder="例：要件定義レビュー" /></label>
-    <label className="wide">説明<textarea value={form.description} maxLength={1000} rows={2} onChange={(e) => setForm({ ...form, description: e.currentTarget.value })} placeholder="完了条件や補足" /></label>
+    <label className="wide">作業の概要<textarea value={form.description} maxLength={1000} rows={3} onChange={(e) => setForm({ ...form, description: e.currentTarget.value })} placeholder="担当者が行う作業、完了条件、報告時に共有したい前提" /></label>
     <label>所属案件<select value={form.projectId ?? ""} onChange={(e) => { const projectId = e.currentTarget.value ? Number(e.currentTarget.value) : null; const project = projects.find((item) => item.id === projectId); const keepAssignee = !project || project.members.some((member) => member.userId === form.assigneeId); const keepParent = tasks.some((task) => task.id === form.parentTaskId && task.projectId === projectId); setForm({ ...form, projectId, parentTaskId: keepParent ? form.parentTaskId : null, assigneeId: keepAssignee ? form.assigneeId : null }); }}><option value="">案件未設定</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
     <label>担当者<select value={form.assigneeId ?? ""} onChange={(e) => setForm({ ...form, assigneeId: e.currentTarget.value ? Number(e.currentTarget.value) : null })}><option value="">未設定</option>{availableAssignees.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select>{selectedProject && availableAssignees.length === 0 && <small>この案件にはユーザーが紐づいていません。</small>}</label>
     <label className="wide">親タスク<select value={form.parentTaskId ?? ""} onChange={(e) => setForm({ ...form, parentTaskId: e.currentTarget.value ? Number(e.currentTarget.value) : null })}><option value="">親なし（最上位）</option>{availableParents.map((task) => <option key={task.id} value={task.id}>{task.parentTaskTitle ? `${task.parentTaskTitle} › ` : ""}{task.title}</option>)}</select><small>子タスクにも同じ操作で子を追加でき、階層を深くできます。</small></label>

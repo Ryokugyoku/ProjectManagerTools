@@ -5,7 +5,7 @@ vi.mock("@tauri-apps/plugin-sql", () => ({ default: { load: vi.fn(async () => db
 
 import {
   createAssignee, createWbsTask, deleteAssignee, deleteWbsTask, getSettings,
-  finalizeWbsTask, listAssignees, listTaskHistory, listTaskTreeHistory, listWbsTasks, saveDailyProgress, saveScheduleChanges, saveSettings, updateAssignee,
+  finalizeWbsTask, listAssignees, listDailyProgressSnapshots, listTaskHistory, listTaskTreeHistory, listWbsTasks, saveDailyProgress, saveScheduleChanges, saveSettings, updateAssignee,
   updateWbsTask, type AppSettings, type UserProfileInput, type WbsTaskInput,
 } from "../../src/lib/wbs";
 
@@ -33,6 +33,13 @@ describe("WBS data methods", () => {
     db.select.mockResolvedValue([]);
     await listWbsTasks();
     expect(db.select.mock.calls[0][1][0]).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it("loads the exact day's work and the latest cumulative progress up to that date", async () => {
+    db.select.mockResolvedValue([{ task_id: 7, daily_progress: 15, cumulative_progress: 55, note: "レビュー完了" }]);
+    expect(await listDailyProgressSnapshots("2026-08-07")).toEqual([{ taskId: 7, date: "2026-08-07", dailyProgress: 15, cumulativeProgress: 55, note: "レビュー完了" }]);
+    expect(db.select).toHaveBeenCalledWith(expect.stringContaining("previous.log_date<=$1"), ["2026-08-07"]);
+    expect(db.select).toHaveBeenCalledWith(expect.stringContaining("exact_log.log_date=$1"), ["2026-08-07"]);
   });
 
   it("creates an unassigned WBS and trims text", async () => {

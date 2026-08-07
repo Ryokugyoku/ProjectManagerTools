@@ -54,6 +54,13 @@ export type AppSettings = {
 export type WorkHistoryType = "created" | "finalized" | "rescheduled" | "progress" | "delay";
 export type WorkHistoryEntry = { id: number; taskId: number; type: WorkHistoryType; reason: string; details: string; occurredAt: string };
 export type TaskTreeHistoryEntry = WorkHistoryEntry & { taskTitle: string; depth: number };
+export type DailyProgressSnapshot = {
+  taskId: number;
+  date: string;
+  dailyProgress: number | null;
+  cumulativeProgress: number;
+  note: string;
+};
 
 type WbsTaskRow = {
   id: number; title: string; description: string; project_id: number | null;
@@ -106,6 +113,32 @@ export async function listWbsTasks(date = localISODate()): Promise<WbsTask[]> {
     ORDER BY w.planned_start, w.id
   `, [date]);
   return deriveParentProgress(rows.map(mapTask));
+}
+
+export async function listDailyProgressSnapshots(date: string): Promise<DailyProgressSnapshot[]> {
+  const db = await database();
+  const rows = await db.select<Array<{
+    task_id: number; daily_progress: number | null; cumulative_progress: number; note: string | null;
+  }>>(`
+    SELECT w.id AS task_id, exact_log.daily_progress, exact_log.note,
+      COALESCE(
+        (SELECT previous.progress FROM wbs_progress_logs previous
+          WHERE previous.task_id=w.id AND previous.log_date<=$1
+          ORDER BY previous.log_date DESC LIMIT 1),
+        CASE WHEN w.actual_end IS NOT NULL AND w.actual_end<=$1 THEN 100 ELSE 0 END
+      ) AS cumulative_progress
+    FROM wbs_tasks w
+    LEFT JOIN wbs_progress_logs exact_log
+      ON exact_log.task_id=w.id AND exact_log.log_date=$1
+    ORDER BY w.id
+  `, [date]);
+  return rows.map((row) => ({
+    taskId: row.task_id,
+    date,
+    dailyProgress: row.daily_progress,
+    cumulativeProgress: row.cumulative_progress,
+    note: row.note ?? "",
+  }));
 }
 
 export async function createWbsTask(input: WbsTaskInput): Promise<void> {
