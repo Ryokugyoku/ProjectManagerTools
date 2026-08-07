@@ -29,6 +29,12 @@ pub fn run() {
             sql: include_str!("../migrations/0004_create_projects.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 5,
+            description: "add_wbs_task_hierarchy",
+            sql: include_str!("../migrations/0005_add_wbs_task_hierarchy.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()

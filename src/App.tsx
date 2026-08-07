@@ -7,10 +7,13 @@ import {
   type WbsTaskInput,
 } from "./lib/wbs";
 import { TimelineBoard } from "./features/wbs/TimelineBoard";
+import { WbsProjectSelector } from "./features/wbs/WbsProjectSelector";
 import { UsersScreen } from "./features/users/UsersScreen";
 import { SettingsScreen } from "./features/settings/SettingsScreen";
 import { ProjectsScreen } from "./features/projects/ProjectsScreen";
+import { HomeScreen } from "./features/home/HomeScreen";
 import { listProjects, type Project } from "./lib/projects";
+import { filterWbsTasks, parentTaskCandidates, summarizeWbsTasks, type WbsFilters, type WbsFilterValue, type WbsGroupBy } from "./lib/wbsView";
 import "./App.css";
 
 type View = "home" | "wbs" | "projects" | "users" | "settings";
@@ -31,8 +34,12 @@ function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [settings, setSettings] = useState<AppSettings>(emptySettings);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [selectedRoadmapProjectId, setSelectedRoadmapProjectId] = useState<number | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  const [createParentTaskId, setCreateParentTaskId] = useState<number | null>(null);
   const [progressTask, setProgressTask] = useState<WbsTask | null>(null);
+  const [groupBy, setGroupBy] = useState<WbsGroupBy>("project");
+  const [filters, setFilters] = useState<WbsFilters>({ query: "", projectId: "all", assigneeId: "all", status: "all" });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -81,11 +88,45 @@ function App() {
     return () => window.clearInterval(timer);
   }, [settings, tasks]);
 
-  const selectedTask = tasks.find((task) => task.id === selectedId) ?? null;
-  const openTasks = useMemo(() => tasks.filter((task) => task.status !== "completed").length, [tasks]);
+  const selectedRoadmapProject = projects.find((project) => project.id === selectedRoadmapProjectId) ?? null;
+  const selectedTask = tasks.find((task) => task.id === selectedId && task.projectId === selectedRoadmapProjectId) ?? null;
+  const projectTasks = useMemo(() => tasks.filter((task) => task.projectId === selectedRoadmapProjectId), [selectedRoadmapProjectId, tasks]);
+  const openTasks = useMemo(() => projectTasks.filter((task) => task.status !== "completed").length, [projectTasks]);
+  const visibleTasks = useMemo(() => filterWbsTasks(tasks, filters), [filters, tasks]);
+  const visibleSummary = useMemo(() => summarizeWbsTasks(visibleTasks, formatISODate(new Date())), [visibleTasks]);
+  const filterAssignees = useMemo(() => {
+    if (typeof filters.projectId !== "number") return assignees;
+    const project = projects.find((item) => item.id === filters.projectId);
+    return project ? assignees.filter((person) => project.members.some((member) => member.userId === person.id)) : assignees;
+  }, [assignees, filters.projectId, projects]);
+  const hasActiveFilters = filters.query.trim() !== "" || filters.assigneeId !== "all" || filters.status !== "all";
+
+  function openWbsProjectSelection() {
+    setSelectedRoadmapProjectId(null);
+    setSelectedId(null);
+    setFilters({ query: "", projectId: "all", assigneeId: "all", status: "all" });
+    setView("wbs");
+  }
+
+  function openProjectRoadmap(project: Project) {
+    setSelectedRoadmapProjectId(project.id);
+    setSelectedId(null);
+    setFilters({ query: "", projectId: project.id, assigneeId: "all", status: "all" });
+  }
+
+  function openTaskCreate(parentTaskId: number | null = null) {
+    setCreateParentTaskId(parentTaskId);
+    setShowCreate(true);
+  }
+
+  useEffect(() => {
+    if (selectedId !== null && !visibleTasks.some((task) => task.id === selectedId)) setSelectedId(null);
+  }, [selectedId, visibleTasks]);
 
   async function removeTask(task: WbsTask) {
-    if (!window.confirm(`「${task.title}」を削除しますか？`)) return;
+    const hasChildren = tasks.some((candidate) => candidate.parentTaskId === task.id);
+    const note = hasChildren ? "\n子タスクは削除せず、親なしのタスクとして残します。" : "";
+    if (!window.confirm(`「${task.title}」を削除しますか？${note}`)) return;
     try { await deleteWbsTask(task.id); await refresh(); } catch (cause) { setError(toMessage(cause)); }
   }
 
@@ -103,7 +144,7 @@ function App() {
         <button className={view === "home" ? "active" : ""} onClick={() => setView("home")} aria-label="ホーム">
           <span aria-hidden="true">⌂</span><small>ホーム</small>
         </button>
-        <button className={view === "wbs" ? "active" : ""} onClick={() => setView("wbs")} aria-label="WBS">
+        <button className={view === "wbs" ? "active" : ""} onClick={openWbsProjectSelection} aria-label="WBS">
           <span aria-hidden="true">▦</span><small>WBS</small>
         </button>
         <button className={view === "projects" ? "active" : ""} onClick={() => setView("projects")} aria-label="案件">
@@ -120,43 +161,64 @@ function App() {
       {error && <div className="global-error error" role="alert"><span>{error}</span><button onClick={() => setError(null)}>閉じる</button></div>}
 
       {view === "home" ? (
-        <main className="home-screen" aria-label="ホーム" />
+        <HomeScreen tasks={tasks} projects={projects} users={assignees} loading={loading} onNavigate={(nextView) => nextView === "wbs" ? openWbsProjectSelection() : setView(nextView)} onOpenTask={(task) => { setSelectedRoadmapProjectId(task.projectId); setFilters({ query: "", projectId: task.projectId ?? "all", assigneeId: "all", status: "all" }); setSelectedId(task.projectId === null ? null : task.id); setView("wbs"); }} />
       ) : view === "users" ? (
         <UsersScreen users={assignees} onChanged={refresh} onError={setError} />
       ) : view === "projects" ? (
         <ProjectsScreen projects={projects} users={assignees} onChanged={refresh} onError={setError} />
       ) : view === "settings" ? (
         <SettingsScreen settings={settings} onSaved={setSettings} onError={setError} />
+      ) : selectedRoadmapProject === null ? (
+        <WbsProjectSelector projects={projects} tasks={tasks} loading={loading} onSelect={openProjectRoadmap} onCreate={() => setView("projects")} />
       ) : (
         <main className="wbs-screen">
           <header className="wbs-header">
             <div>
               <p className="eyebrow">WORK BREAKDOWN STRUCTURE</p>
-              <h1>WBSロードマップ</h1>
+              <h1>{selectedRoadmapProject.name}</h1>
+              <p className="header-context">WBSロードマップ · {selectedRoadmapProject.code}</p>
               <p className="header-subtitle">{openTasks}件の未完了WBS · {countryName(settings.countryCode)}の営業日</p>
             </div>
             <div className="header-actions">
-              <button className="primary-button" onClick={() => setShowCreate(true)}>＋ WBSを登録</button>
+              <button className="quiet-button" onClick={openWbsProjectSelection}>プロジェクトを変更</button>
+              <button className="primary-button" onClick={() => openTaskCreate()}>＋ タスクを登録</button>
             </div>
           </header>
 
-          {loading ? <div className="loading-card">WBSを読み込んでいます…</div> : <TimelineBoard tasks={tasks} assignees={assignees} countryCode={settings.countryCode} selectedId={selectedId} onSelect={(task) => setSelectedId(task.id)} onScheduleChange={updateSchedule} />}
-          {selectedTask && <aside className="task-drawer" aria-label="WBS詳細"><button className="drawer-close" aria-label="詳細を閉じる" onClick={() => setSelectedId(null)}>×</button><TaskEditor task={selectedTask} countryCode={settings.countryCode} projects={projects} assignees={assignees} onChanged={refresh} onProgress={() => setProgressTask(selectedTask)} onDelete={() => void removeTask(selectedTask)} onError={setError} /></aside>}
+          {!loading && assignees.length === 0 && <section className="setup-banner" aria-label="WBSの準備状況"><div><span className="setup-icon">↗</span><div><strong>WBSをチームの計画として活用しましょう</strong><p>ユーザーを登録して案件メンバーに追加すると、WBSへ責任者を割り当てられます。</p></div></div><div><button className="quiet-button" onClick={() => setView("users")}>ユーザーを登録</button></div></section>}
+
+          {!loading && projectTasks.length > 0 && <>
+            <section className="wbs-summary" aria-label="表示中のWBS概要">
+              <div><span>表示中</span><strong>{visibleSummary.total}</strong><small>全{projectTasks.length}件</small></div>
+              <div><span>未完了</span><strong>{visibleSummary.open}</strong><small>平均進捗 {visibleSummary.averageProgress}%</small></div>
+              <div className={visibleSummary.overdue > 0 ? "attention" : ""}><span>期限超過</span><strong>{visibleSummary.overdue}</strong><small>完了以外</small></div>
+              <div className={visibleSummary.unassigned > 0 ? "attention" : ""}><span>責任者未設定</span><strong>{visibleSummary.unassigned}</strong><small>責任者の割り当て</small></div>
+            </section>
+            <section className="wbs-controls" aria-label="WBSの表示条件">
+              <label className="search-field"><span>検索</span><input type="search" value={filters.query} onChange={(event) => setFilters({ ...filters, query: event.currentTarget.value })} placeholder="WBS名・責任者" /></label>
+              <label><span>責任者</span><select value={filters.assigneeId} onChange={(event) => setFilters({ ...filters, assigneeId: parseFilterValue(event.currentTarget.value) })}><option value="all">すべての責任者</option><option value="unset">未設定</option>{filterAssignees.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label>
+              <label><span>状態</span><select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.currentTarget.value as WbsFilters["status"] })}><option value="all">すべての状態</option>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+              <fieldset className="group-switch"><legend>まとめ方</legend><button type="button" className={groupBy === "project" ? "active" : ""} aria-pressed={groupBy === "project"} onClick={() => setGroupBy("project")}>案件</button><button type="button" className={groupBy === "assignee" ? "active" : ""} aria-pressed={groupBy === "assignee"} onClick={() => setGroupBy("assignee")}>責任者</button></fieldset>
+            </section>
+          </>}
+
+          {loading ? <div className="loading-card">WBSを読み込んでいます…</div> : projectTasks.length === 0 ? <section className="wbs-empty"><span>▦</span><h2>このプロジェクトの最初のタスクを登録しましょう</h2><p>責任者と日程を紐づけると、ロードマップ上で予定と進捗をまとめて確認できます。</p><button className="primary-button" onClick={() => openTaskCreate()}>＋ タスクを登録</button></section> : visibleTasks.length === 0 ? <section className="wbs-empty filtered"><span>⌕</span><h2>条件に一致するWBSがありません</h2><p>検索語または絞り込み条件を変更してください。</p>{hasActiveFilters && <button className="quiet-button" onClick={() => setFilters({ query: "", projectId: selectedRoadmapProject.id, assigneeId: "all", status: "all" })}>絞り込みを解除</button>}</section> : <TimelineBoard tasks={visibleTasks} assignees={assignees} projects={projects} groupBy={groupBy} countryCode={settings.countryCode} selectedId={selectedId} onSelect={(task) => setSelectedId(task.id)} onScheduleChange={updateSchedule} />}
+          {selectedTask && <aside className="task-drawer" aria-label="タスク詳細"><button className="drawer-close" aria-label="詳細を閉じる" onClick={() => setSelectedId(null)}>×</button><TaskEditor task={selectedTask} tasks={projectTasks} countryCode={settings.countryCode} projects={projects} assignees={assignees} onChanged={refresh} onCreateChild={() => openTaskCreate(selectedTask.id)} onProgress={() => setProgressTask(selectedTask)} onDelete={() => void removeTask(selectedTask)} onError={setError} /></aside>}
         </main>
       )}
 
-      {showCreate && <TaskModal settings={settings} projects={projects} assignees={assignees} onClose={() => setShowCreate(false)} onSaved={async () => { setShowCreate(false); await refresh(); }} onError={setError} />}
+      {showCreate && <TaskModal settings={settings} projects={projects} assignees={assignees} tasks={projectTasks} initialProjectId={selectedRoadmapProjectId} initialParentTaskId={createParentTaskId} onClose={() => setShowCreate(false)} onSaved={async () => { setShowCreate(false); await refresh(); }} onError={setError} />}
       {progressTask && <ProgressModal task={progressTask} onClose={() => setProgressTask(null)} onSaved={async () => { setProgressTask(null); await refresh(); }} onError={setError} />}
     </div>
   );
 }
 
-function TaskModal({ settings, projects, assignees, onClose, onSaved, onError }: {
-  settings: AppSettings; projects: Project[]; assignees: Assignee[]; onClose: () => void; onSaved: () => Promise<void>; onError: (value: string | null) => void;
+function TaskModal({ settings, projects, assignees, tasks, initialProjectId, initialParentTaskId, onClose, onSaved, onError }: {
+  settings: AppSettings; projects: Project[]; assignees: Assignee[]; tasks: WbsTask[]; initialProjectId: number | null; initialParentTaskId: number | null; onClose: () => void; onSaved: () => Promise<void>; onError: (value: string | null) => void;
 }) {
   const today = formatISODate(new Date());
   const [form, setForm] = useState<WbsTaskInput>({
-    title: "", description: "", projectId: null, assigneeId: null, status: "not_started", progress: 0,
+    title: "", description: "", projectId: initialProjectId, parentTaskId: initialParentTaskId, assigneeId: null, status: "not_started", progress: 0,
     countryCode: settings.countryCode, plannedStart: today,
     plannedEnd: calculateEndDate(today, 1, settings.countryCode), businessDays: 1,
     actualStart: null, actualEnd: null,
@@ -171,9 +233,9 @@ function TaskModal({ settings, projects, assignees, onClose, onSaved, onError }:
     catch (cause) { onError(toMessage(cause)); setSaving(false); }
   }
 
-  return <Modal title="WBSを登録" onClose={onClose}>
+  return <Modal title={initialParentTaskId === null ? "タスクを登録" : "子タスクを登録"} onClose={onClose}>
     <form className="modal-form" onSubmit={submit}>
-      <FormFields form={form} setForm={setForm} projects={projects} assignees={assignees} includeActual={false} />
+      <FormFields form={form} setForm={setForm} projects={projects} assignees={assignees} tasks={tasks} currentTaskId={null} includeActual={false} />
       <div className="preview-card">
         <span>PREVIEW</span>
         <div><small>終了予定日</small><strong>{formatLongDate(end)}</strong></div>
@@ -185,8 +247,8 @@ function TaskModal({ settings, projects, assignees, onClose, onSaved, onError }:
   </Modal>;
 }
 
-function TaskEditor({ task, countryCode, projects, assignees, onChanged, onProgress, onDelete, onError }: {
-  task: WbsTask; countryCode: string; projects: Project[]; assignees: Assignee[]; onChanged: () => Promise<void>; onProgress: () => void; onDelete: () => void; onError: (value: string | null) => void;
+function TaskEditor({ task, tasks, countryCode, projects, assignees, onChanged, onCreateChild, onProgress, onDelete, onError }: {
+  task: WbsTask; tasks: WbsTask[]; countryCode: string; projects: Project[]; assignees: Assignee[]; onChanged: () => Promise<void>; onCreateChild: () => void; onProgress: () => void; onDelete: () => void; onError: (value: string | null) => void;
 }) {
   const [form, setForm] = useState<WbsTaskInput>({ ...task, countryCode });
   const [saving, setSaving] = useState(false);
@@ -200,28 +262,31 @@ function TaskEditor({ task, countryCode, projects, assignees, onChanged, onProgr
   }
 
   return <form className="panel-form" onSubmit={submit}>
-    <div className="panel-title"><div><p className="eyebrow">DETAIL</p><h2>WBSを編集</h2></div><span className={`status-badge ${form.status}`}>{statusLabels[form.status]}</span></div>
-    <FormFields form={form} setForm={setForm} projects={projects} assignees={assignees} includeActual />
+    <div className="panel-title"><div><p className="eyebrow">DETAIL</p><h2>タスクを編集</h2></div><span className={`status-badge ${form.status}`}>{statusLabels[form.status]}</span></div>
+    <FormFields form={form} setForm={setForm} projects={projects} assignees={assignees} tasks={tasks} currentTaskId={task.id} includeActual />
     <div className="progress-block"><div><span>進捗率</span><strong>{form.progress}%</strong></div><input aria-label="進捗率" type="range" min="0" max="100" step="5" value={form.progress} onChange={(e) => setForm({ ...form, progress: Number(e.currentTarget.value) })} /></div>
+    <button type="button" className="child-task-button" onClick={onCreateChild}>＋ このタスクに子タスクを追加</button>
     <div className="editor-actions"><button type="button" className="quiet-button" onClick={onProgress}>今日の進捗</button><button className="primary-button" disabled={saving}>{saving ? "保存中…" : "変更を保存"}</button></div>
-    <button type="button" className="danger-button" onClick={onDelete}>このWBSを削除</button>
+    <button type="button" className="danger-button" onClick={onDelete}>このタスクを削除</button>
   </form>;
 }
 
-function FormFields({ form, setForm, projects, assignees, includeActual }: {
-  form: WbsTaskInput; setForm: (value: WbsTaskInput) => void; projects: Project[]; assignees: Assignee[]; includeActual: boolean;
+function FormFields({ form, setForm, projects, assignees, tasks, currentTaskId, includeActual }: {
+  form: WbsTaskInput; setForm: (value: WbsTaskInput) => void; projects: Project[]; assignees: Assignee[]; tasks: WbsTask[]; currentTaskId: number | null; includeActual: boolean;
 }) {
   const selectedProject = projects.find((project) => project.id === form.projectId);
   const availableAssignees = selectedProject
     ? assignees.filter((person) => selectedProject.members.some((member) => member.userId === person.id))
     : assignees;
+  const availableParents = parentTaskCandidates(tasks, form.projectId, currentTaskId);
   return <div className="field-grid">
-    <label className="wide">WBS名<input value={form.title} maxLength={120} required onChange={(e) => setForm({ ...form, title: e.currentTarget.value })} placeholder="例：要件定義レビュー" /></label>
+    <label className="wide">タスク名<input value={form.title} maxLength={120} required onChange={(e) => setForm({ ...form, title: e.currentTarget.value })} placeholder="例：要件定義レビュー" /></label>
     <label className="wide">説明<textarea value={form.description} maxLength={1000} rows={2} onChange={(e) => setForm({ ...form, description: e.currentTarget.value })} placeholder="完了条件や補足" /></label>
-    <label>所属案件<select value={form.projectId ?? ""} onChange={(e) => { const projectId = e.currentTarget.value ? Number(e.currentTarget.value) : null; const project = projects.find((item) => item.id === projectId); const keepAssignee = !project || project.members.some((member) => member.userId === form.assigneeId); setForm({ ...form, projectId, assigneeId: keepAssignee ? form.assigneeId : null }); }}><option value="">案件未設定</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
-    <label>担当者<select value={form.assigneeId ?? ""} onChange={(e) => setForm({ ...form, assigneeId: e.currentTarget.value ? Number(e.currentTarget.value) : null })}><option value="">未割当</option>{availableAssignees.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select>{selectedProject && availableAssignees.length === 0 && <small>この案件にはユーザーが紐づいていません。</small>}</label>
+    <label>所属案件<select value={form.projectId ?? ""} onChange={(e) => { const projectId = e.currentTarget.value ? Number(e.currentTarget.value) : null; const project = projects.find((item) => item.id === projectId); const keepAssignee = !project || project.members.some((member) => member.userId === form.assigneeId); const keepParent = tasks.some((task) => task.id === form.parentTaskId && task.projectId === projectId); setForm({ ...form, projectId, parentTaskId: keepParent ? form.parentTaskId : null, assigneeId: keepAssignee ? form.assigneeId : null }); }}><option value="">案件未設定</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
+    <label>責任者<select value={form.assigneeId ?? ""} onChange={(e) => setForm({ ...form, assigneeId: e.currentTarget.value ? Number(e.currentTarget.value) : null })}><option value="">未設定</option>{availableAssignees.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select>{selectedProject && availableAssignees.length === 0 && <small>この案件にはユーザーが紐づいていません。</small>}</label>
+    <label className="wide">親タスク<select value={form.parentTaskId ?? ""} onChange={(e) => setForm({ ...form, parentTaskId: e.currentTarget.value ? Number(e.currentTarget.value) : null })}><option value="">親なし（最上位）</option>{availableParents.map((task) => <option key={task.id} value={task.id}>{task.parentTaskTitle ? `${task.parentTaskTitle} › ` : ""}{task.title}</option>)}</select><small>子タスクにも同じ操作で子を追加でき、階層を深くできます。</small></label>
     <label>開始予定日<input type="date" required value={form.plannedStart} onChange={(e) => setForm({ ...form, plannedStart: e.currentTarget.value })} /></label>
-    <label>営業日数<input type="number" min="1" max="999" required value={form.businessDays} onChange={(e) => setForm({ ...form, businessDays: Math.max(1, Number(e.currentTarget.value)) })} /></label>
+    <label>営業日数<input type="number" min="1" max="999" required placeholder="1" value={form.businessDays} onChange={(e) => setForm({ ...form, businessDays: Math.max(1, Number(e.currentTarget.value)) })} />{!includeActual && <small>初期値は1営業日です。</small>}</label>
     {includeActual && <>
       <label>状態<select value={form.status} onChange={(e) => setForm({ ...form, status: e.currentTarget.value as WbsStatus })}>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
       <span />
@@ -261,5 +326,6 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
 function formatLongDate(value: string) { return value ? new Intl.DateTimeFormat("ja-JP", { year: "numeric", month: "long", day: "numeric", weekday: "short" }).format(new Date(`${value}T12:00:00`)) : "—"; }
 function countryName(code: string) { return countries.find((country) => country.code === code)?.name ?? code; }
 function toMessage(cause: unknown) { return cause instanceof Error ? cause.message : String(cause); }
+function parseFilterValue(value: string): WbsFilterValue { return value === "all" || value === "unset" ? value : Number(value); }
 
 export default App;
