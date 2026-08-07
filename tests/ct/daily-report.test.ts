@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { calculateProjectScheduleVariance } from "../../src/lib/dailyReport";
+import { calculateDelayImpact, calculateProjectScheduleVariance, calculateTaskScheduleVariance } from "../../src/lib/dailyReport";
 import type { DailyProgressSnapshot, WbsTask } from "../../src/lib/wbs";
 
 // 因子: 実績進捗（前倒し/同率/遅延）、計画状態（確定/編集中）、階層（末端/親）。
 // 確定済み末端タスクだけを対象に、符号と小数1桁の営業日換算が崩れないことを確認する。
 const base: WbsTask = { id: 1, title: "実装", description: "", projectId: 1, projectName: "案件", parentTaskId: null, parentTaskTitle: null, assigneeId: 1, assigneeName: "山田", status: "in_progress", progress: 0, countryCode: "JP", plannedStart: "2026-08-03", plannedEnd: "2026-08-14", businessDays: 10, actualStart: null, actualEnd: null, finalized: true };
-const snapshot = (progress: number): DailyProgressSnapshot => ({ taskId: 1, date: "2026-08-07", dailyProgress: 5, cumulativeProgress: progress, note: "" });
+const snapshot = (progress: number): DailyProgressSnapshot => ({ taskId: 1, date: "2026-08-07", dailyProgress: 5, cumulativeProgress: progress, note: "", latestHistoryType: "progress", latestHistoryDetails: "進捗記録", rescheduleReason: "", delayReason: "" });
 
 describe("project schedule variance combinations", () => {
   it.each([
@@ -25,5 +25,15 @@ describe("project schedule variance combinations", () => {
 
   it("does not claim schedule variance for editing-only tasks", () => {
     expect(calculateProjectScheduleVariance([{ ...base, finalized: false }], [snapshot(90)], "2026-08-07")).toEqual({ businessDays: 0, actualProgress: 0, plannedProgress: 0, trackedTasks: 0 });
+  });
+
+  it("reports task delay in decimal business days and checks successor buffer", () => {
+    const delayed = calculateTaskScheduleVariance(base, snapshot(40), "2026-08-07");
+    expect(delayed).toBe(-1);
+    const affected = { ...base, id: 2, title: "後続A", prerequisiteTaskId: 1, plannedStart: "2026-08-17" };
+    const buffered = { ...base, id: 3, title: "後続B", prerequisiteTaskId: 1, plannedStart: "2026-08-19" };
+    const impact = calculateDelayImpact(base, [base, affected, buffered], delayed!);
+    expect(impact.projectedEnd).toBe("2026-08-17");
+    expect(impact.affectedTasks.map((task) => task.id)).toEqual([2]);
   });
 });

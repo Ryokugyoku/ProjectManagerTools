@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildTimelineDateRange, filterWbsTasks, parentTaskCandidates, type WbsFilters } from "../../src/lib/wbsView";
+import { buildTimelineDateRange, filterWbsTasks, parentTaskCandidates, prerequisiteTaskCandidates, type WbsFilters } from "../../src/lib/wbsView";
 import type { Milestone } from "../../src/lib/milestones";
 import type { WbsTask } from "../../src/lib/wbs";
 
@@ -40,6 +40,26 @@ describe("parent task candidate combinations", () => {
     [null, null, []],
   ] as const)("project=%s current=%s returns valid parents", (projectId, currentTaskId, ids) => {
     expect(parentTaskCandidates(tree, projectId, currentTaskId).map((task) => task.id)).toEqual(ids);
+  });
+});
+
+// 因子: 案件（一致/不一致/未設定）、階層（最上位/同じ親/別の親）、自己・循環（なし/あり）。
+// 完了前提候補は常に同じ案件・同じ階層に限定され、自己参照と循環候補を除外する。
+describe("prerequisite task candidate combinations", () => {
+  const sibling = { ...base, id: 8, title: "同階層" };
+  const child = { ...base, id: 9, title: "子", parentTaskId: 20, parentTaskTitle: "親" };
+  const childSibling = { ...child, id: 10, title: "同じ親の子" };
+  const otherProject = { ...base, id: 11, projectId: 2, projectName: "案件B" };
+  const cyclic = { ...base, id: 12, title: "循環候補", prerequisiteTaskId: 1 };
+  const candidates = [base, sibling, child, childSibling, otherProject, cyclic];
+
+  it.each([
+    [1, null, 1, [8]],
+    [1, 20, 9, [10]],
+    [2, null, 11, []],
+    [null, null, null, []],
+  ] as const)("project=%s parent=%s current=%s", (projectId, parentTaskId, currentTaskId, ids) => {
+    expect(prerequisiteTaskCandidates(candidates, projectId, parentTaskId, currentTaskId).map((task) => task.id)).toEqual(ids);
   });
 });
 

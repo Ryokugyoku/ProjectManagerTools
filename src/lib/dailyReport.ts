@@ -20,8 +20,15 @@ export type DailyReportPerson = {
 export type DailyProjectReport = {
   project: Project;
   variance: ScheduleVariance;
+  delayedTaskCount: number;
   people: DailyReportPerson[];
   activeTaskChains: WbsTask[][];
+};
+
+export type DelayImpact = {
+  affectedTasks: WbsTask[];
+  successorTasks: WbsTask[];
+  projectedEnd: string;
 };
 
 export function previousBusinessDate(date: string, countryCode: string): string {
@@ -51,6 +58,26 @@ export function calculateProjectScheduleVariance(
   };
 }
 
+export function calculateTaskScheduleVariance(
+  task: WbsTask,
+  snapshot: DailyProgressSnapshot | undefined,
+  date: string,
+): number | null {
+  if (!task.finalized || !snapshot) return null;
+  const planned = expectedProgress(task, date);
+  return Math.round(((snapshot.cumulativeProgress - planned) / 100) * Math.max(1, task.businessDays) * 10) / 10;
+}
+
+export function calculateDelayImpact(task: WbsTask, tasks: WbsTask[], delayBusinessDays: number): DelayImpact {
+  const successorTasks = tasks.filter((candidate) => candidate.prerequisiteTaskId === task.id);
+  const projectedEnd = shiftBusinessDate(task.plannedEnd, Math.ceil(Math.abs(delayBusinessDays)), task.countryCode);
+  return {
+    successorTasks,
+    affectedTasks: successorTasks.filter((successor) => successor.plannedStart <= projectedEnd),
+    projectedEnd,
+  };
+}
+
 export function buildDailyProjectReports(
   projects: Project[],
   tasks: WbsTask[],
@@ -63,16 +90,23 @@ export function buildDailyProjectReports(
     const people = new Map<string, DailyReportPerson>();
     for (const task of projectTasks) {
       const snapshot = snapshotByTask.get(task.id);
-      if (!snapshot || snapshot.dailyProgress === null) continue;
+      if (!snapshot || (snapshot.dailyProgress === null && !snapshot.latestHistoryDetails && !snapshot.rescheduleReason && !snapshot.delayReason)) continue;
       const key = task.assigneeId === null ? "unset" : String(task.assigneeId);
       const group = people.get(key) ?? { key, name: task.assigneeName ?? "担当者未設定", records: [] };
       group.records.push({ task, snapshot });
       people.set(key, group);
     }
     const activeTasks = projectTasks.filter((task) => task.status === "in_progress");
+    const parentIds = new Set(projectTasks.flatMap((task) => task.parentTaskId === null ? [] : [task.parentTaskId]));
+    const delayedTaskCount = projectTasks.filter((task) => {
+      if (parentIds.has(task.id)) return false;
+      const variance = calculateTaskScheduleVariance(task, snapshotByTask.get(task.id), date);
+      return variance !== null && variance < 0;
+    }).length;
     return {
       project,
       variance: calculateProjectScheduleVariance(projectTasks, snapshots, date),
+      delayedTaskCount,
       people: [...people.values()].sort((a, b) => a.name.localeCompare(b.name, "ja")),
       activeTaskChains: activeTasks.map((task) => [...ancestorTrail(projectTasks, task.id), task]),
     };

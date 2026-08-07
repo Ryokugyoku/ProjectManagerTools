@@ -27,6 +27,8 @@ export type WbsTask = {
   projectName: string | null;
   parentTaskId: number | null;
   parentTaskTitle: string | null;
+  prerequisiteTaskId?: number | null;
+  prerequisiteTaskTitle?: string | null;
   assigneeId: number | null;
   assigneeName: string | null;
   status: WbsStatus;
@@ -42,7 +44,7 @@ export type WbsTask = {
   todayProgressNote?: string;
   latestDelayReason?: string;
 };
-export type WbsTaskInput = Omit<WbsTask, "id" | "assigneeName" | "projectName" | "parentTaskTitle" | "plannedEnd" | "finalized" | "todayDailyProgress" | "todayProgressNote" | "latestDelayReason"> & {
+export type WbsTaskInput = Omit<WbsTask, "id" | "assigneeName" | "projectName" | "parentTaskTitle" | "prerequisiteTaskTitle" | "plannedEnd" | "finalized" | "todayDailyProgress" | "todayProgressNote" | "latestDelayReason"> & {
   plannedEnd: string;
 };
 export type AppSettings = {
@@ -60,11 +62,16 @@ export type DailyProgressSnapshot = {
   dailyProgress: number | null;
   cumulativeProgress: number;
   note: string;
+  latestHistoryType: WorkHistoryType | null;
+  latestHistoryDetails: string;
+  rescheduleReason: string;
+  delayReason: string;
 };
 
 type WbsTaskRow = {
   id: number; title: string; description: string; project_id: number | null;
   project_name: string | null; parent_task_id: number | null; parent_task_title: string | null;
+  prerequisite_task_id: number | null; prerequisite_task_title: string | null;
   assignee_id: number | null;
   assignee_name: string | null; status: WbsStatus; progress: number; country_code: string;
   planned_start: string; planned_end: string; business_days: number;
@@ -97,6 +104,7 @@ export async function listWbsTasks(date = localISODate()): Promise<WbsTask[]> {
   const rows = await db.select<WbsTaskRow[]>(`
     SELECT w.id, w.title, w.description, w.project_id, p.name AS project_name,
       w.parent_task_id, parent.title AS parent_task_title,
+      w.prerequisite_task_id, prerequisite.title AS prerequisite_task_title,
       w.assignee_id, a.name AS assignee_name,
       w.status, w.progress, w.country_code, w.planned_start, w.planned_end,
       w.business_days, w.actual_start, w.actual_end, w.finalized,
@@ -109,6 +117,7 @@ export async function listWbsTasks(date = localISODate()): Promise<WbsTask[]> {
     LEFT JOIN assignees a ON a.id = w.assignee_id
     LEFT JOIN projects p ON p.id = w.project_id
     LEFT JOIN wbs_tasks parent ON parent.id = w.parent_task_id
+    LEFT JOIN wbs_tasks prerequisite ON prerequisite.id = w.prerequisite_task_id
     LEFT JOIN wbs_progress_logs today_log ON today_log.task_id=w.id AND today_log.log_date=$1
     ORDER BY w.planned_start, w.id
   `, [date]);
@@ -119,6 +128,8 @@ export async function listDailyProgressSnapshots(date: string): Promise<DailyPro
   const db = await database();
   const rows = await db.select<Array<{
     task_id: number; daily_progress: number | null; cumulative_progress: number; note: string | null;
+    latest_history_type: WorkHistoryType | null; latest_history_details: string | null;
+    reschedule_reason: string | null; delay_reason: string | null;
   }>>(`
     SELECT w.id AS task_id, exact_log.daily_progress, exact_log.note,
       COALESCE(
@@ -126,7 +137,23 @@ export async function listDailyProgressSnapshots(date: string): Promise<DailyPro
           WHERE previous.task_id=w.id AND previous.log_date<=$1
           ORDER BY previous.log_date DESC LIMIT 1),
         CASE WHEN w.actual_end IS NOT NULL AND w.actual_end<=$1 THEN 100 ELSE 0 END
-      ) AS cumulative_progress
+      ) AS cumulative_progress,
+      (SELECT history.event_type FROM wbs_work_history history
+        WHERE history.task_id=w.id AND history.event_type<>'delay'
+          AND date(history.occurred_at, 'localtime')=$1
+        ORDER BY history.occurred_at DESC, history.id DESC LIMIT 1) AS latest_history_type,
+      (SELECT history.details FROM wbs_work_history history
+        WHERE history.task_id=w.id AND history.event_type<>'delay'
+          AND date(history.occurred_at, 'localtime')=$1
+        ORDER BY history.occurred_at DESC, history.id DESC LIMIT 1) AS latest_history_details,
+      (SELECT history.reason FROM wbs_work_history history
+        WHERE history.task_id=w.id AND history.event_type='rescheduled'
+          AND date(history.occurred_at, 'localtime')=$1
+        ORDER BY history.occurred_at DESC, history.id DESC LIMIT 1) AS reschedule_reason,
+      (SELECT history.reason FROM wbs_work_history history
+        WHERE history.task_id=w.id AND history.event_type='delay'
+          AND date(history.occurred_at, 'localtime')=$1
+        ORDER BY history.occurred_at DESC, history.id DESC LIMIT 1) AS delay_reason
     FROM wbs_tasks w
     LEFT JOIN wbs_progress_logs exact_log
       ON exact_log.task_id=w.id AND exact_log.log_date=$1
@@ -138,6 +165,10 @@ export async function listDailyProgressSnapshots(date: string): Promise<DailyPro
     dailyProgress: row.daily_progress,
     cumulativeProgress: row.cumulative_progress,
     note: row.note ?? "",
+    latestHistoryType: row.latest_history_type,
+    latestHistoryDetails: row.latest_history_details ?? "",
+    rescheduleReason: row.reschedule_reason ?? "",
+    delayReason: row.delay_reason ?? "",
   }));
 }
 
@@ -146,11 +177,12 @@ export async function createWbsTask(input: WbsTaskInput): Promise<void> {
   const db = await database();
   await validateProjectAssignment(db, input.projectId, input.assigneeId);
   await validateParentTask(db, null, input.projectId, input.parentTaskId);
+  await validatePrerequisiteTask(db, null, input.projectId, input.parentTaskId, input.prerequisiteTaskId ?? null);
   await db.execute(`
     INSERT INTO wbs_tasks
-      (title, description, project_id, parent_task_id, assignee_id, status, progress, country_code,
-       planned_start, planned_end, business_days, actual_start, actual_end)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      (title, description, project_id, parent_task_id, prerequisite_task_id, assignee_id, status, progress,
+       country_code, planned_start, planned_end, business_days, actual_start, actual_end)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
   `, taskValues(input));
   if (input.parentTaskId !== null) {
     await db.execute("INSERT INTO wbs_work_history (task_id, event_type, details) VALUES ($1, 'created', $2)", [
@@ -164,13 +196,15 @@ export async function updateWbsTask(id: number, input: WbsTaskInput): Promise<vo
   const db = await database();
   await validateProjectAssignment(db, input.projectId, input.assigneeId);
   await validateParentTask(db, id, input.projectId, input.parentTaskId);
+  await validatePrerequisiteTask(db, id, input.projectId, input.parentTaskId, input.prerequisiteTaskId ?? null);
   await validateChildProjects(db, id, input.projectId);
+  await validateDependentHierarchy(db, id, input.projectId, input.parentTaskId);
   await validateFinalizedFields(db, id, input);
   await db.execute(`
     UPDATE wbs_tasks SET title=$1, description=$2, project_id=$3, parent_task_id=$4,
-      assignee_id=$5, status=$6, progress=$7, country_code=$8, planned_start=$9, planned_end=$10,
-      business_days=$11, actual_start=$12, actual_end=$13,
-      updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id=$14
+      prerequisite_task_id=$5, assignee_id=$6, status=$7, progress=$8, country_code=$9,
+      planned_start=$10, planned_end=$11, business_days=$12, actual_start=$13, actual_end=$14,
+      updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id=$15
   `, [...taskValues(input), id]);
 }
 
@@ -178,6 +212,7 @@ export async function deleteWbsTask(id: number): Promise<void> {
   const db = await database();
   await db.execute("DELETE FROM wbs_work_history WHERE task_id=$1", [id]);
   await db.execute("DELETE FROM wbs_progress_logs WHERE task_id=$1", [id]);
+  await db.execute("UPDATE wbs_tasks SET prerequisite_task_id=NULL WHERE prerequisite_task_id=$1", [id]);
   await db.execute("UPDATE wbs_tasks SET parent_task_id=NULL WHERE parent_task_id=$1", [id]);
   await db.execute("DELETE FROM wbs_tasks WHERE id=$1", [id]);
 }
@@ -327,6 +362,7 @@ function mapTask(row: WbsTaskRow): WbsTask {
     id: row.id, title: row.title, description: row.description,
     projectId: row.project_id, projectName: row.project_name,
     parentTaskId: row.parent_task_id, parentTaskTitle: row.parent_task_title,
+    prerequisiteTaskId: row.prerequisite_task_id, prerequisiteTaskTitle: row.prerequisite_task_title,
     assigneeId: row.assignee_id, assigneeName: row.assignee_name, status: row.status,
     progress: row.progress, countryCode: row.country_code, plannedStart: row.planned_start,
     plannedEnd: row.planned_end, businessDays: row.business_days,
@@ -344,7 +380,7 @@ function localISODate() {
 }
 
 function taskValues(input: WbsTaskInput): unknown[] {
-  return [input.title.trim(), input.description.trim(), input.projectId, input.parentTaskId, input.assigneeId,
+  return [input.title.trim(), input.description.trim(), input.projectId, input.parentTaskId, input.prerequisiteTaskId ?? null, input.assigneeId,
     input.status, input.progress, input.countryCode, input.plannedStart, input.plannedEnd,
     input.businessDays, input.actualStart || null, input.actualEnd || null];
 }
@@ -401,6 +437,37 @@ async function validateChildProjects(db: Database, taskId: number, projectId: nu
     [taskId, projectId],
   );
   if ((rows[0]?.invalid_children ?? 0) > 0) throw new Error("子タスクがあるタスクは別の案件へ移動できません。");
+}
+
+async function validatePrerequisiteTask(db: Database, taskId: number | null, projectId: number | null, parentTaskId: number | null, prerequisiteTaskId: number | null) {
+  if (prerequisiteTaskId === null) return;
+  if (taskId === prerequisiteTaskId) throw new Error("タスク自身を完了前提には設定できません。");
+  const rows = await db.select<Array<{ candidate_project_id: number | null; candidate_parent_task_id: number | null; is_cycle: number }>>(`
+    WITH RECURSIVE prerequisite_chain(id, prerequisite_task_id) AS (
+      SELECT id, prerequisite_task_id FROM wbs_tasks WHERE id=$1
+      UNION ALL
+      SELECT prerequisite.id, prerequisite.prerequisite_task_id
+      FROM wbs_tasks prerequisite JOIN prerequisite_chain chain ON prerequisite.id=chain.prerequisite_task_id
+    )
+    SELECT candidate.project_id AS candidate_project_id,
+      candidate.parent_task_id AS candidate_parent_task_id,
+      EXISTS(SELECT 1 FROM prerequisite_chain WHERE id=$2) AS is_cycle
+    FROM wbs_tasks candidate WHERE candidate.id=$1
+  `, [prerequisiteTaskId, taskId ?? -1]);
+  const candidate = rows[0];
+  if (!candidate) throw new Error("選択した完了前提タスクが見つかりません。");
+  if (candidate.candidate_project_id !== projectId || candidate.candidate_parent_task_id !== parentTaskId) {
+    throw new Error("完了前提は同じ案件・同じ階層のタスクから選択してください。");
+  }
+  if (candidate.is_cycle === 1) throw new Error("完了前提の依存関係を循環させることはできません。");
+}
+
+async function validateDependentHierarchy(db: Database, taskId: number, projectId: number | null, parentTaskId: number | null) {
+  const rows = await db.select<Array<{ invalid_dependents: number }>>(
+    "SELECT COUNT(*) AS invalid_dependents FROM wbs_tasks WHERE prerequisite_task_id=$1 AND (project_id IS NOT $2 OR parent_task_id IS NOT $3)",
+    [taskId, projectId, parentTaskId],
+  );
+  if ((rows[0]?.invalid_dependents ?? 0) > 0) throw new Error("このタスクを完了前提にしている同階層タスクがあるため、階層または案件を変更できません。");
 }
 
 async function validateFinalizedFields(db: Database, taskId: number, input: WbsTaskInput) {

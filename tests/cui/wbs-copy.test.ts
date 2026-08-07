@@ -31,4 +31,10 @@ describe("WBSの操作文言", () => {
     expect(appSource).toContain("親自身のみ");
     expect(appSource).toContain("さらに${filtered.length - 8}件を表示");
   });
+
+  it("同階層から完了前提タスクを選べる", () => {
+    expect(appSource).toContain("完了が前提となるタスク");
+    expect(appSource).toContain("同じ案件・同じ親タスク配下");
+    expect(appSource).toContain("prerequisiteTaskCandidates");
+  });
 });

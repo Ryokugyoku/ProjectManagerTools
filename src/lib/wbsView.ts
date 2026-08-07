@@ -163,6 +163,23 @@ export function parentTaskCandidates(tasks: WbsTask[], projectId: number | null,
     .map((item) => item.task);
 }
 
+export function prerequisiteTaskCandidates(tasks: WbsTask[], projectId: number | null, parentTaskId: number | null, currentTaskId: number | null): WbsTask[] {
+  if (projectId === null) return [];
+  const byId = new Map(tasks.map((task) => [task.id, task]));
+  return tasks.filter((candidate) => {
+    if (candidate.projectId !== projectId || (candidate.parentTaskId ?? null) !== parentTaskId || candidate.id === currentTaskId) return false;
+    if (currentTaskId === null) return true;
+    const visited = new Set<number>();
+    let prerequisiteId = candidate.prerequisiteTaskId ?? null;
+    while (prerequisiteId !== null && !visited.has(prerequisiteId)) {
+      if (prerequisiteId === currentTaskId) return false;
+      visited.add(prerequisiteId);
+      prerequisiteId = byId.get(prerequisiteId)?.prerequisiteTaskId ?? null;
+    }
+    return true;
+  }).sort((a, b) => a.plannedStart.localeCompare(b.plannedStart) || a.id - b.id);
+}
+
 export function ancestorTrail(tasks: WbsTask[], taskId: number): WbsTask[] {
   const byId = new Map(tasks.map((task) => [task.id, task]));
   const result: WbsTask[] = [];

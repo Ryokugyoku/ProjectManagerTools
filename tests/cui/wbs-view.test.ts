@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ancestorTrail, buildTimelineDateRange, buildTimelineMonths, buildWbsGroups, dailyProgressActionLabel, filterWbsTasks, flattenWbsTaskTree, parentTaskCandidates, summarizeWbsTasks, type WbsFilters } from "../../src/lib/wbsView";
+import { ancestorTrail, buildTimelineDateRange, buildTimelineMonths, buildWbsGroups, dailyProgressActionLabel, filterWbsTasks, flattenWbsTaskTree, parentTaskCandidates, prerequisiteTaskCandidates, summarizeWbsTasks, type WbsFilters } from "../../src/lib/wbsView";
 import type { Milestone } from "../../src/lib/milestones";
 import type { Project } from "../../src/lib/projects";
 import type { Assignee, WbsTask } from "../../src/lib/wbs";
@@ -48,6 +48,14 @@ describe("WBS view methods", () => {
     expect(dailyProgressActionLabel({}, false)).toBe("今日進んだ進捗を入力");
     expect(dailyProgressActionLabel({ todayDailyProgress: 0 }, false)).toBe("今日の進捗を編集");
     expect(dailyProgressActionLabel({ todayDailyProgress: 10 }, true)).toBeNull();
+  });
+
+  it("offers only same-level tasks as prerequisites and excludes cycles", () => {
+    const sibling = { ...tasks[0], id: 5, title: "同階層A" };
+    const dependent = { ...tasks[0], id: 6, title: "同階層B", prerequisiteTaskId: 1 };
+    expect(prerequisiteTaskCandidates([tasks[0], tasks[1], sibling], 10, null, 1).map((task) => task.id)).toEqual([5]);
+    expect(prerequisiteTaskCandidates([tasks[0], tasks[1], sibling, dependent], 10, null, 1).map((task) => task.id)).not.toContain(6);
+    expect(prerequisiteTaskCandidates([tasks[0]], null, null, null)).toEqual([]);
   });
 
   it("builds a horizontally scrollable range that includes tasks, milestones, and padding", () => {
