@@ -19,5 +19,10 @@ describe("analysis screen", () => {
     expect(markup).toContain("顧客レビュー待ち");
     expect(markup).toContain("completed-node");
     expect(markup).toContain("ahead-node");
+    expect(markup).toContain("network-inspector");
+    expect(markup).toContain("network-stage");
+    expect(markup).toContain("node-chip");
+    expect(markup).toContain('role="button"');
+    expect(markup).not.toContain("delay-callout");
   });
 });

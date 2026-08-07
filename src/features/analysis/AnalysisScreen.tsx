@@ -38,14 +38,28 @@ export function AnalysisScreen({ projects, tasks, today, loading }: { projects: 
 }
 
 function CriticalPathChart({ analysis, today }: { analysis: ReturnType<typeof buildDependencyAnalysis>; today: string }) {
+  const delayedTaskId = analysis.nodes.find((node) => isTaskDelayed(node.task, today))?.task.id ?? null;
+  const [selectedTaskId, setSelectedTaskId] = useState<number | null>(delayedTaskId ?? analysis.criticalTaskIds[0] ?? analysis.nodes[0]?.task.id ?? null);
   if (analysis.nodes.length === 0) return <ChartEmpty title="表示するタスクがありません" description="WBSへタスクを追加してください。" />;
   const layers = new Map<number, typeof analysis.nodes>();
   for (const node of analysis.nodes) layers.set(node.layer, [...(layers.get(node.layer) ?? []), node]);
   const maxRows = Math.max(...[...layers.values()].map((items) => items.length));
-  const width = Math.max(760, (layers.size - 1) * 210 + 190);
-  const height = Math.max(260, maxRows * 92 + 40);
+  const nodeWidth = 184;
+  const nodeHeight = 76;
+  const layerCount = Math.max(1, layers.size);
+  const horizontalInset = 84;
+  const width = Math.max(1080, horizontalInset * 2 + nodeWidth * layerCount + Math.max(0, layerCount - 1) * 76);
+  const height = Math.max(360, maxRows * 112 + 112);
+  const horizontalGap = layerCount === 1 ? 0 : (width - horizontalInset * 2 - nodeWidth) / (layerCount - 1);
   const positions = new Map<number, { x: number; y: number }>();
-  for (const [layer, nodes] of layers) nodes.forEach((node, index) => positions.set(node.task.id, { x: 30 + layer * 210, y: 24 + index * 92 }));
+  for (const [layer, nodes] of layers) {
+    const groupHeight = nodes.length * nodeHeight + Math.max(0, nodes.length - 1) * 36;
+    const startY = 68 + (height - 88 - groupHeight) / 2;
+    nodes.forEach((node, index) => positions.set(node.task.id, {
+      x: layerCount === 1 ? (width - nodeWidth) / 2 : horizontalInset + layer * horizontalGap,
+      y: startY + index * (nodeHeight + 36),
+    }));
+  }
   const delayedIds = new Set(analysis.nodes.filter((node) => isTaskDelayed(node.task, today)).map((node) => node.task.id));
   const affectedIds = new Set(delayedIds);
   let expanded = true;
@@ -57,16 +71,33 @@ function CriticalPathChart({ analysis, today }: { analysis: ReturnType<typeof bu
       if (from?.status !== "completed" && to?.status !== "completed" && affectedIds.has(edge.from) && !affectedIds.has(edge.to)) { affectedIds.add(edge.to); expanded = true; }
     }
   }
-  const impactedEdges = new Set(analysis.edges.filter((edge) => affectedIds.has(edge.from)).map((edge) => `${edge.from}-${edge.to}`));
-  return <div className="chart-layout"><div className="chart-heading"><div><p className="eyebrow">DEPENDENCY NETWORK</p><h2>遅れると完了日へ直結する流れ</h2></div><div className="chart-key"><span><i className="delay" />遅延・影響</span><span><i className="completed" />完了</span><span><i className="ahead" />前倒し</span><span><i className="critical" />クリティカル</span></div></div>
+  const impactedEdges = new Set(analysis.edges.filter((edge) => affectedIds.has(edge.from) && analysis.nodes.find((node) => node.task.id === edge.to)?.task.status !== "completed").map((edge) => `${edge.from}-${edge.to}`));
+  const selectedNode = analysis.nodes.find((node) => node.task.id === selectedTaskId) ?? analysis.nodes.find((node) => node.task.id === delayedTaskId) ?? analysis.nodes[0];
+  const selectedState = networkNodeState(selectedNode, delayedIds, affectedIds, today);
+  const selectedReason = selectedNode.task.latestDelayReason?.trim() || "遅延理由はまだ記録されていません。";
+  return <div className="chart-layout network-layout"><div className="chart-heading"><div><p className="eyebrow">DEPENDENCY NETWORK</p><h2>プロジェクト完了までの依存ネットワーク</h2></div><div className="chart-key"><span><i className="delay" />遅延・影響</span><span><i className="completed" />完了</span><span><i className="ahead" />前倒し</span><span><i className="critical" />クリティカル</span></div></div>
     {analysis.hasCycle && <p className="chart-warning" role="alert">循環する依存関係が含まれるため、経路計算は参考値です。</p>}
-    <div className="dependency-chart"><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-labelledby="critical-title critical-desc"><title id="critical-title">クリティカルパスのアローダイアグラム</title><desc id="critical-desc">赤いタスクと矢印は遅延余裕がなく、案件完了日に直結します。</desc>
-      <defs><marker id="arrow-normal" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" /></marker><marker id="arrow-critical" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" /></marker><marker id="arrow-delay" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" /></marker></defs>
-      {analysis.edges.map((edge) => { const from = positions.get(edge.from)!; const to = positions.get(edge.to)!; const impacted = impactedEdges.has(`${edge.from}-${edge.to}`); return <path key={`${edge.from}-${edge.to}`} className={impacted ? "delay-impact-edge" : edge.critical ? "critical-edge" : "dependency-edge"} markerEnd={`url(#arrow-${impacted ? "delay" : edge.critical ? "critical" : "normal"})`} d={`M ${from.x + 160} ${from.y + 28} C ${from.x + 182} ${from.y + 28}, ${to.x - 22} ${to.y + 28}, ${to.x} ${to.y + 28}`} />; })}
-      {analysis.nodes.map((node) => { const point = positions.get(node.task.id)!; const delayed = delayedIds.has(node.task.id); const completed = node.task.status === "completed"; const ahead = !completed && node.task.finalized && progressHealth(node.task, today) === "ahead"; const affected = !delayed && !completed && affectedIds.has(node.task.id); const reason = node.task.latestDelayReason?.trim() || "遅延理由は未記録です"; const className = delayed ? "delay-node" : completed ? "completed-node" : ahead ? "ahead-node" : affected ? "delay-affected-node" : node.critical ? "critical-node" : "dependency-node"; const state = delayed ? "遅延発生" : completed ? "完了" : ahead ? "前倒し" : affected ? "遅延影響あり" : `${node.task.businessDays}日 · 余裕 ${node.totalFloat}日`; return <g key={node.task.id} className={className} transform={`translate(${point.x} ${point.y})`} tabIndex={0} role="group" aria-label={`${node.task.title}、${state}、${node.task.businessDays}営業日、余裕${node.totalFloat}日${delayed ? `、遅延理由：${reason}` : ""}`}><rect width="160" height="58" rx="10" /><text x="12" y="23">{truncate(node.task.title, 14)}</text><text className="node-meta" x="12" y="43">{state}</text>{delayed && <g className="delay-callout" transform="translate(8 -20)"><rect width="184" height="22" rx="7" /><text x="8" y="15">{truncate(reason, 23)}</text></g>}</g>; })}
+    <div className={`network-inspector ${selectedState.className}`} aria-live="polite"><div className="inspector-title"><span><i />{selectedState.label}</span><strong>{selectedNode.task.title}</strong></div><dl><div><dt>期間</dt><dd>{selectedNode.task.businessDays}営業日</dd></div><div><dt>進捗</dt><dd>{selectedNode.task.progress}%</dd></div><div><dt>余裕</dt><dd>{selectedNode.totalFloat}日</dd></div></dl>{selectedState.key === "delay" && <p><span>遅延理由</span>{selectedReason}</p>}</div>
+    <div className="dependency-chart"><svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet" role="img" aria-labelledby="critical-title critical-desc"><title id="critical-title">クリティカルパスの依存ネットワーク</title><desc id="critical-desc">タスクを工程ごとに配置し、依存関係と遅延の伝播を線で示します。ノードを選択すると詳細を確認できます。</desc>
+      <defs><pattern id="network-grid" width="28" height="28" patternUnits="userSpaceOnUse"><path d="M 28 0 L 0 0 0 28" /></pattern><filter id="edge-glow" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="4" result="blur" /><feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge></filter><marker id="arrow-normal" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" /></marker><marker id="arrow-critical" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" /></marker><marker id="arrow-delay" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" /></marker></defs>
+      <rect className="network-grid" width={width} height={height} />
+      {[...layers.keys()].map((layer) => { const x = layerCount === 1 ? width / 2 : horizontalInset + layer * horizontalGap + nodeWidth / 2; return <g className="network-stage" key={layer}><text x={x} y="28" textAnchor="middle">STAGE {String(layer + 1).padStart(2, "0")}</text><line x1={x} y1="42" x2={x} y2={height - 26} /></g>; })}
+      {analysis.edges.map((edge) => { const from = positions.get(edge.from)!; const to = positions.get(edge.to)!; const impacted = impactedEdges.has(`${edge.from}-${edge.to}`); const className = impacted ? "delay-impact-edge" : edge.critical ? "critical-edge" : "dependency-edge"; const startX = from.x + nodeWidth + 7; const startY = from.y + nodeHeight / 2; const endX = to.x - 10; const endY = to.y + nodeHeight / 2; const bend = Math.max(54, (endX - startX) * .46); const path = `M ${startX} ${startY} C ${startX + bend} ${startY}, ${endX - bend} ${endY}, ${endX} ${endY}`; return <g key={`${edge.from}-${edge.to}`} className={`network-edge ${className}`}><path className="edge-aura" d={path} /><path className="edge-line" markerEnd={`url(#arrow-${impacted ? "delay" : edge.critical ? "critical" : "normal"})`} d={path} /></g>; })}
+      {analysis.nodes.map((node, index) => { const point = positions.get(node.task.id)!; const visual = networkNodeState(node, delayedIds, affectedIds, today); const selected = node.task.id === selectedNode.task.id; return <g key={node.task.id} className={`network-node ${visual.className}${selected ? " selected" : ""}`} transform={`translate(${point.x} ${point.y})`} tabIndex={0} role="button" onClick={() => setSelectedTaskId(node.task.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedTaskId(node.task.id); } }} aria-pressed={selected} aria-label={`${node.task.title}、${visual.label}、進捗${node.task.progress}%、${node.task.businessDays}営業日、余裕${node.totalFloat}日`}><rect className="node-halo" x="-4" y="-4" width={nodeWidth + 8} height={nodeHeight + 8} rx="18" /><rect className="node-surface" width={nodeWidth} height={nodeHeight} rx="14" /><circle className="node-status" cx="18" cy="19" r="5" /><text className="node-order" x={nodeWidth - 14} y="22" textAnchor="end">{String(index + 1).padStart(2, "0")}</text><text className="node-title" x="31" y="23">{truncate(node.task.title, 15)}</text><g className="node-chip" transform="translate(14 40)"><rect width="72" height="23" rx="11.5" /><text x="36" y="15" textAnchor="middle">{visual.label}</text></g><text className="node-metrics" x={nodeWidth - 14} y="55" textAnchor="end">{node.task.progress}% · {node.task.businessDays}d</text><circle className="node-port input" cx="-1" cy={nodeHeight / 2} r="3.5" /><circle className="node-port output" cx={nodeWidth + 1} cy={nodeHeight / 2} r="3.5" /></g>; })}
     </svg></div>
     <p className="chart-note">算出根拠：登録済みの営業日数と完了前提。赤は現在の遅延起点から影響を受ける後続経路、緑は遅延余裕0日のクリティカル経路です。</p>
   </div>;
+}
+
+type NetworkNodeState = { key: "delay" | "completed" | "ahead" | "affected" | "critical" | "normal"; label: string; className: string };
+
+function networkNodeState(node: ReturnType<typeof buildDependencyAnalysis>["nodes"][number], delayedIds: Set<number>, affectedIds: Set<number>, today: string): NetworkNodeState {
+  if (delayedIds.has(node.task.id)) return { key: "delay", label: "遅延", className: "delay-node" };
+  if (node.task.status === "completed") return { key: "completed", label: "完了", className: "completed-node" };
+  if (node.task.finalized && progressHealth(node.task, today) === "ahead") return { key: "ahead", label: "前倒し", className: "ahead-node" };
+  if (affectedIds.has(node.task.id)) return { key: "affected", label: "遅延影響", className: "delay-affected-node" };
+  if (node.critical) return { key: "critical", label: "クリティカル", className: "critical-node" };
+  return { key: "normal", label: "余裕あり", className: "dependency-node" };
 }
 
 function BurndownChart({ tasks, today }: { tasks: WbsTask[]; today: string }) {
