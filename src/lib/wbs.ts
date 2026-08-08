@@ -336,8 +336,9 @@ export async function saveDailyProgress(taskId: number, date: string, dailyProgr
     runningProgress = Math.min(100, runningProgress + increment);
     return { logDate, progress: runningProgress };
   });
-  const selectedProgress = recalculated.find((log) => log.logDate === date)?.progress ?? baselineProgress;
-  const totalProgress = recalculated[recalculated.length - 1]?.progress ?? baselineProgress;
+  // dailyByDateには選択日を必ず追加するため、再計算結果と選択日の要素は必ず存在する。
+  const selectedProgress = recalculated.find((log) => log.logDate === date)!.progress;
+  const totalProgress = recalculated[recalculated.length - 1].progress;
   const expected = expectedProgress({ plannedStart: task.planned_start, plannedEnd: task.planned_end, businessDays: task.business_days, countryCode: task.country_code, assigneeLeaves: leaveRows.map(mapUserLeave) }, date);
   const normalizedReason = delayReason.trim();
   if (task.finalized === 1 && selectedProgress < expected && !normalizedReason) throw new Error("計画進捗を下回る理由を入力してください。");

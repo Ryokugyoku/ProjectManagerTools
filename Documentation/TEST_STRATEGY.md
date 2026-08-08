@@ -22,7 +22,7 @@
 - DBアクセス: Tauri SQL境界をモックし、SQL、引数、呼び出し順、返却値変換を確認する
 - 新しい重要動作を追加した場合、正常系に加えて意味のある代表的な拒否条件を確認する
 
-カバレッジは `src/lib/calendar.ts`、`src/lib/wbs.ts`、`src/lib/projects.ts` を対象とし、関数100%、行・文85%以上、分岐75%以上を必須にします。
+カバレッジは `src/lib/calendar.ts`、`src/lib/leaveApprovals.ts`、`src/lib/wbs.ts`、`src/lib/projects.ts` を対象とし、関数・分岐100%、行・文85%以上を必須にします。
 
 ## 3. CT（組み合わせテスト）
 

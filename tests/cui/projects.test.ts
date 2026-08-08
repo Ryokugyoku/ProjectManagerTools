@@ -26,6 +26,13 @@ describe("project data methods", () => {
     expect(db.execute).toHaveBeenNthCalledWith(3, expect.stringContaining("project_members"), [10, 2, "PM"]);
   });
 
+  it("stores blank planned dates as null", async () => {
+    await createProject({ ...project, plannedStart: "", plannedEnd: "", members: [] });
+    expect(db.execute).toHaveBeenNthCalledWith(1, expect.stringContaining("INSERT INTO projects"), [
+      "案件A", "PRJ-001", "顧客", "概要", "active", "high", null, null,
+    ]);
+  });
+
   it("rejects creation when an insert id is unavailable", async () => {
     db.execute.mockResolvedValueOnce({ rowsAffected: 1 });
     await expect(createProject({ ...project, members: [] })).rejects.toThrow("案件ID");
