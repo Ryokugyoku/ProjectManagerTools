@@ -101,6 +101,18 @@ describe("WBSロードマップの選択表示", () => {
     expect(markup).toContain("午後半休");
     expect(markup).toContain("本日中に承認対応");
   });
+
+  it("日程未割り当てのサブタスクはバーの代わりに入力導線を示す", () => {
+    const markup = renderToStaticMarkup(<TimelineBoard {...{
+      tasks: [{ ...task, scheduleAssigned: false }], milestones: [], users: [], projects: [], groupBy: "project" as const,
+      countryCode: "JP", selectedId: null, onSelect: vi.fn(), onCreateSubtask: vi.fn(), onShowHistory: vi.fn(),
+      onRecordProgress: vi.fn(), onSelectMilestone: vi.fn(), onScheduleChange: vi.fn(),
+    }} />);
+    expect(markup).toContain("日程未割り当て");
+    expect(markup).toContain("日程を入力");
+    expect(markup).toContain("開始予定日と営業日数が未設定です");
+    expect(markup).not.toContain('class="timeline-bar');
+  });
 });
 
 describe("ホームの遅延表示", () => {

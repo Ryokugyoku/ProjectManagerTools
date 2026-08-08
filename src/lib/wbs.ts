@@ -52,6 +52,7 @@ export type WbsTask = {
   plannedStart: string;
   plannedEnd: string;
   businessDays: number;
+  scheduleAssigned?: boolean;
   actualStart: string | null;
   actualEnd: string | null;
   finalized: boolean;
@@ -92,7 +93,7 @@ type WbsTaskRow = {
   project_name: string | null; parent_task_id: number | null; parent_task_title: string | null;
   owner_user_id: number | null;
   owner_user_name: string | null; status: WbsStatus; progress: number; country_code: string;
-  planned_start: string; planned_end: string; business_days: number;
+  planned_start: string; planned_end: string; business_days: number; schedule_assigned: number;
   actual_start: string | null; actual_end: string | null;
   finalized: number;
   today_daily_progress: number | null;
@@ -132,7 +133,7 @@ export async function listWbsTasks(date = localISODate()): Promise<WbsTask[]> {
       w.parent_task_id, parent.title AS parent_task_title,
       w.owner_user_id, a.name AS owner_user_name,
       w.status, w.progress, w.country_code, w.planned_start, w.planned_end,
-      w.business_days, w.actual_start, w.actual_end, w.finalized,
+      w.business_days, w.schedule_assigned, w.actual_start, w.actual_end, w.finalized,
       today_log.daily_progress AS today_daily_progress,
       today_log.note AS today_progress_note,
       today_log.early_start_reason AS today_early_start_reason,
@@ -240,12 +241,13 @@ export async function createWbsTask(input: WbsTaskInput): Promise<void> {
   await validateParentTask(db, null, input.projectId, input.parentTaskId);
   const prerequisiteIds = normalizedPrerequisiteIds(input);
   await validatePrerequisiteTasks(db, null, input.projectId, input.parentTaskId, prerequisiteIds);
+  const creationInput = { ...input, scheduleAssigned: input.parentTaskId === null };
   const result = await db.execute(`
     INSERT INTO wbs_tasks
       (title, description, project_id, parent_task_id, owner_user_id, status, progress,
-       country_code, planned_start, planned_end, business_days, actual_start, actual_end)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-  `, taskValues(input));
+       country_code, planned_start, planned_end, business_days, schedule_assigned, actual_start, actual_end)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+  `, taskValues(creationInput));
   const taskId = Number(result.lastInsertId);
   await replaceTaskDependencies(db, taskId, prerequisiteIds);
   if (input.parentTaskId !== null) {
@@ -268,8 +270,8 @@ export async function updateWbsTask(id: number, input: WbsTaskInput): Promise<vo
   await db.execute(`
     UPDATE wbs_tasks SET title=$1, description=$2, project_id=$3, parent_task_id=$4,
       owner_user_id=$5, status=$6, progress=$7, country_code=$8,
-      planned_start=$9, planned_end=$10, business_days=$11, actual_start=$12, actual_end=$13,
-      updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id=$14
+      planned_start=$9, planned_end=$10, business_days=$11, schedule_assigned=$12, actual_start=$13, actual_end=$14,
+      updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id=$15
   `, [...taskValues(input), id]);
   await replaceTaskDependencies(db, id, prerequisiteIds);
 }
@@ -285,6 +287,9 @@ export async function deleteWbsTask(id: number): Promise<void> {
 
 export async function finalizeWbsTask(taskId: number): Promise<void> {
   const db = await database();
+  const rows = await db.select<Array<{ schedule_assigned: number }>>("SELECT schedule_assigned FROM wbs_tasks WHERE id=$1", [taskId]);
+  if (!rows[0]) throw new Error("確定するタスクが見つかりません。");
+  if (rows[0].schedule_assigned !== 1) throw new Error("日程を入力してからタスクの状態を確定してください。");
   await db.execute("UPDATE wbs_tasks SET finalized=1, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id=$1", [taskId]);
   await db.execute("INSERT INTO task_activity_events (task_id, event_kind, details) VALUES ($1, 'finalized', $2)", [taskId, "タスクの計画を確定しました。"]);
 }
@@ -297,7 +302,7 @@ export async function saveScheduleChanges(changes: Array<{ taskId: number; plann
     const rows = await db.select<Array<{ planned_start: string; planned_end: string }>>("SELECT planned_start, planned_end FROM wbs_tasks WHERE id=$1", [change.taskId]);
     const before = rows[0];
     if (!before) throw new Error("変更対象のタスクが見つかりません。");
-    await db.execute(`UPDATE wbs_tasks SET planned_start=$1, planned_end=$2, business_days=$3,
+    await db.execute(`UPDATE wbs_tasks SET planned_start=$1, planned_end=$2, business_days=$3, schedule_assigned=1,
       updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id=$4`, [change.plannedStart, change.plannedEnd, change.businessDays, change.taskId]);
     const context = change.historyContext?.trim();
     const scheduleDetails = `${before.planned_start}〜${before.planned_end} → ${change.plannedStart}〜${change.plannedEnd}`;
@@ -310,8 +315,8 @@ export async function saveScheduleChanges(changes: Array<{ taskId: number; plann
 export async function saveDailyProgress(taskId: number, date: string, dailyProgress: number, note: string, delayReason: string, earlyStartReason = "") {
   if (!Number.isFinite(dailyProgress) || dailyProgress < 0 || dailyProgress > 100) throw new Error("その日に進んだ進捗は0〜100%で入力してください。");
   const db = await database();
-  const rows = await db.select<Array<{ progress: number; finalized: number; planned_start: string; planned_end: string; business_days: number; country_code: string; owner_user_id: number | null; previous_daily: number; child_count: number }>>(
-    `SELECT w.progress, w.finalized, w.planned_start, w.planned_end, w.business_days, w.country_code, w.owner_user_id,
+  const rows = await db.select<Array<{ progress: number; finalized: number; planned_start: string; planned_end: string; business_days: number; schedule_assigned: number; country_code: string; owner_user_id: number | null; previous_daily: number; child_count: number }>>(
+    `SELECT w.progress, w.finalized, w.planned_start, w.planned_end, w.business_days, w.schedule_assigned, w.country_code, w.owner_user_id,
       COALESCE((SELECT daily_progress FROM task_progress_entries WHERE task_id=w.id AND entry_date=$2), 0) AS previous_daily,
       (SELECT COUNT(*) FROM wbs_tasks child WHERE child.parent_task_id=w.id) AS child_count
       FROM wbs_tasks w WHERE w.id=$1`,
@@ -319,6 +324,7 @@ export async function saveDailyProgress(taskId: number, date: string, dailyProgr
   );
   const task = rows[0];
   if (!task) throw new Error("進捗を記録するタスクが見つかりません。");
+  if (task.schedule_assigned === 0) throw new Error("日程を入力してから進捗を記録してください。");
   if (task.child_count > 0) throw new Error("サブタスクを持つタスクには進捗を直接入力できません。");
   const logs = await db.select<Array<{ entry_date: string; cumulative_progress: number; daily_progress: number }>>(
     "SELECT entry_date, cumulative_progress, daily_progress FROM task_progress_entries WHERE task_id=$1 ORDER BY entry_date",
@@ -503,7 +509,7 @@ function mapTask(row: WbsTaskRow, dependencies: Array<{ id: number; title: strin
     prerequisiteTaskIds: dependencies.map((item) => item.id), prerequisiteTasks: dependencies,
     ownerUserId: row.owner_user_id, ownerUserName: row.owner_user_name, status: row.status,
     progress: row.progress, countryCode: row.country_code, plannedStart: row.planned_start,
-    plannedEnd: row.planned_end, businessDays: row.business_days,
+    plannedEnd: row.planned_end, businessDays: row.business_days, scheduleAssigned: row.schedule_assigned !== 0,
     actualStart: row.actual_start, actualEnd: row.actual_end, finalized: row.finalized === 1,
     todayDailyProgress: row.today_daily_progress,
     todayProgressNote: row.today_progress_note ?? "",
@@ -521,7 +527,7 @@ function localISODate() {
 function taskValues(input: WbsTaskInput): unknown[] {
   return [input.title.trim(), input.description.trim(), input.projectId, input.parentTaskId, input.ownerUserId,
     input.status, input.progress, input.countryCode, input.plannedStart, input.plannedEnd,
-    input.businessDays, input.actualStart || null, input.actualEnd || null];
+    input.businessDays, input.scheduleAssigned === false ? 0 : 1, input.actualStart || null, input.actualEnd || null];
 }
 
 function validateTask(input: WbsTaskInput) {

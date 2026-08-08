@@ -17,6 +17,12 @@ pub fn run() {
             sql: include_str!("../migrations/0002_add_early_start_reason.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 3,
+            description: "add_schedule_assignment",
+            sql: include_str!("../migrations/0003_add_schedule_assignment.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()

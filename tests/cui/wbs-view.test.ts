@@ -26,8 +26,14 @@ describe("WBS view methods", () => {
   });
 
   it("summarizes visible work without treating completed work as overdue", () => {
-    expect(summarizeWbsTasks(tasks, "2026-08-06")).toEqual({ total: 3, open: 2, overdue: 1, delayed: 1, unassigned: 2, averageProgress: 47 });
+    expect(summarizeWbsTasks(tasks, "2026-08-06")).toEqual({ total: 3, open: 2, overdue: 1, delayed: 1, unassigned: 2, scheduleUnassigned: 0, averageProgress: 47 });
     expect(summarizeWbsTasks([], "2026-08-06").averageProgress).toBe(0);
+  });
+
+  it("keeps schedule-unassigned work out of the timeline range and overdue count", () => {
+    const unscheduled = { ...tasks[0], scheduleAssigned: false, plannedStart: "2030-01-01", plannedEnd: "2030-01-31" };
+    expect(summarizeWbsTasks([unscheduled], "2030-02-01")).toMatchObject({ overdue: 0, scheduleUnassigned: 1 });
+    expect(buildTimelineDateRange([unscheduled], [], "2026-08-06")).toEqual({ start: "2026-07-30", end: "2026-09-09", days: 42 });
   });
 
   it("groups only visible work and preserves an explicit unset group", () => {

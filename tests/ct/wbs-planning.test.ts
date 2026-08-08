@@ -61,3 +61,19 @@ describe("parent progress combinations", () => {
     expect(deriveParentProgress([parent, ...children])[0]).toMatchObject({ progress: expected, status: expectedStatus });
   });
 });
+
+describe("日程割り当てと階層の組み合わせ", () => {
+  // 因子: 日程（割り当て済み/未割り当て）、階層（親/子）。
+  // 未割り当ての子は、割り当てが完了するまで親の計画進捗へ混入させない。
+  it.each([
+    [true, 50],
+    [false, 100],
+  ] as const)("second child assigned=%s", (scheduleAssigned, expected) => {
+    const parent = { ...base, progress: 0 };
+    const children = [
+      { ...base, id: 2, parentTaskId: 1, progress: 100, businessDays: 1 },
+      { ...base, id: 3, parentTaskId: 1, progress: 0, businessDays: 1, scheduleAssigned },
+    ];
+    expect(deriveParentProgress([parent, ...children])[0].progress).toBe(expected);
+  });
+});

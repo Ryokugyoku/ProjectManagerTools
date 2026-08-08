@@ -34,7 +34,7 @@ export function buildTimelineDateRange(
 ): TimelineDateRange {
   const values = [
     today,
-    ...tasks.flatMap((task) => [task.plannedStart, task.plannedEnd]),
+    ...tasks.filter((task) => task.scheduleAssigned !== false).flatMap((task) => [task.plannedStart, task.plannedEnd]),
     ...milestones.map((milestone) => milestone.dueDate),
   ].filter(Boolean).sort();
   const start = addCalendarDays(values[0] ?? today, -7);
@@ -80,9 +80,10 @@ export function summarizeWbsTasks(tasks: WbsTask[], today: string) {
   return {
     total: tasks.length,
     open: open.length,
-    overdue: open.filter((task) => task.plannedEnd < today).length,
+    overdue: open.filter((task) => task.scheduleAssigned !== false && task.plannedEnd < today).length,
     delayed: open.filter((task) => isTaskDelayed(task, today)).length,
     unassigned: tasks.filter((task) => task.projectId === null || task.ownerUserId === null).length,
+    scheduleUnassigned: tasks.filter((task) => task.scheduleAssigned === false).length,
     averageProgress: tasks.length
       ? Math.round(tasks.reduce((sum, task) => sum + task.progress, 0) / tasks.length)
       : 0,

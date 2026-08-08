@@ -27,7 +27,7 @@ describe("WBS data methods", () => {
     db.select.mockResolvedValueOnce([{ id: 1, title: "設計", description: "", project_id: 2, project_name: "案件", parent_task_id: 5, parent_task_title: "要件定義", owner_user_id: 3, owner_user_name: "山田", status: "in_progress", progress: 40, country_code: "JP", planned_start: "2026-08-06", planned_end: "2026-08-13", business_days: 5, actual_start: "2026-08-06", actual_end: null, finalized: 1, today_daily_progress: 10, today_progress_note: "確認済み", latest_delay_reason: "レビュー待ち" }])
       .mockResolvedValueOnce([{ task_id: 1, prerequisite_task_id: 6, prerequisite_task_title: "基盤", prerequisite_task_status: "completed" }, { task_id: 1, prerequisite_task_id: 7, prerequisite_task_title: "デザイン", prerequisite_task_status: "in_progress" }])
       .mockResolvedValueOnce([]);
-    expect(await listWbsTasks("2026-08-07")).toEqual([{ id: 1, title: "設計", description: "", projectId: 2, projectName: "案件", parentTaskId: 5, parentTaskTitle: "要件定義", prerequisiteTaskIds: [6, 7], prerequisiteTasks: [{ id: 6, title: "基盤", status: "completed" }, { id: 7, title: "デザイン", status: "in_progress" }], ownerUserId: 3, ownerUserName: "山田", status: "in_progress", progress: 40, countryCode: "JP", plannedStart: "2026-08-06", plannedEnd: "2026-08-13", businessDays: 5, actualStart: "2026-08-06", actualEnd: null, finalized: true, todayDailyProgress: 10, todayProgressNote: "確認済み", todayEarlyStartReason: "", latestDelayReason: "レビュー待ち" }]);
+    expect(await listWbsTasks("2026-08-07")).toEqual([{ id: 1, title: "設計", description: "", projectId: 2, projectName: "案件", parentTaskId: 5, parentTaskTitle: "要件定義", prerequisiteTaskIds: [6, 7], prerequisiteTasks: [{ id: 6, title: "基盤", status: "completed" }, { id: 7, title: "デザイン", status: "in_progress" }], ownerUserId: 3, ownerUserName: "山田", status: "in_progress", progress: 40, countryCode: "JP", plannedStart: "2026-08-06", plannedEnd: "2026-08-13", businessDays: 5, scheduleAssigned: true, actualStart: "2026-08-06", actualEnd: null, finalized: true, todayDailyProgress: 10, todayProgressNote: "確認済み", todayEarlyStartReason: "", latestDelayReason: "レビュー待ち" }]);
     expect(db.select).toHaveBeenCalledWith(expect.stringContaining("today_log.entry_date=$1"), ["2026-08-07"]);
   });
 
@@ -108,10 +108,29 @@ describe("WBS data methods", () => {
     db.select.mockResolvedValue([{ parent_project_id: 4, is_descendant: 0 }]);
     await createWbsTask({ ...task, projectId: 4, parentTaskId: 7 });
     expect(db.execute).toHaveBeenCalledWith(expect.stringContaining("parent_task_id"), expect.arrayContaining([4, 7]));
+    expect(db.execute.mock.calls[0][1]?.[11]).toBe(0);
     expect(db.execute).toHaveBeenCalledWith(expect.stringContaining("'created'"), [7, "サブタスク「設計」を追加しました。"]);
 
     db.select.mockResolvedValue([{ parent_project_id: 5, is_descendant: 0 }]);
     await expect(createWbsTask({ ...task, projectId: 4, parentTaskId: 7 })).rejects.toThrow("同じ案件");
+  });
+
+  it("rejects finalizing a schedule-unassigned task", async () => {
+    db.select.mockResolvedValue([{ schedule_assigned: 0 }]);
+    await expect(finalizeWbsTask(7)).rejects.toThrow("日程を入力してから");
+    expect(db.execute).not.toHaveBeenCalled();
+  });
+
+  it("rejects finalizing a missing task", async () => {
+    db.select.mockResolvedValueOnce([]);
+    await expect(finalizeWbsTask(999)).rejects.toThrow("確定するタスクが見つかりません");
+    expect(db.execute).not.toHaveBeenCalled();
+  });
+
+  it("rejects progress for a schedule-unassigned task", async () => {
+    db.select.mockResolvedValueOnce([{ progress: 0, finalized: 0, planned_start: "2026-08-08", planned_end: "2026-08-08", business_days: 1, schedule_assigned: 0, country_code: "JP", owner_user_id: null, previous_daily: 0, child_count: 0 }]);
+    await expect(saveDailyProgress(7, "2026-08-08", 10, "", "")).rejects.toThrow("日程を入力してから");
+    expect(db.execute).not.toHaveBeenCalled();
   });
 
   it("rejects self-parenting and descendant-parent cycles", async () => {
@@ -269,6 +288,7 @@ describe("WBS data methods", () => {
   });
 
   it("finalizes tasks and persists reasoned schedule history", async () => {
+    db.select.mockResolvedValueOnce([{ schedule_assigned: 1 }]);
     await finalizeWbsTask(7);
     expect(db.execute).toHaveBeenCalledTimes(2);
     db.execute.mockClear();

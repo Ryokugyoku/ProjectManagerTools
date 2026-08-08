@@ -15,7 +15,7 @@ export function countBusinessDays(start: string, end: string, countryCode: strin
   return count;
 }
 
-type ProgressPlan = Pick<WbsTask, "plannedStart" | "plannedEnd" | "businessDays" | "countryCode"> & { ownerLeaves?: UserLeave[] };
+type ProgressPlan = Pick<WbsTask, "plannedStart" | "plannedEnd" | "businessDays" | "countryCode" | "scheduleAssigned"> & { ownerLeaves?: UserLeave[] };
 export type DayCheckpoint = "none" | "morning" | "day";
 
 export function availableWorkdays(start: string, end: string, countryCode: string, leaves: UserLeave[] = []): number {
@@ -31,6 +31,7 @@ export function availableWorkdays(start: string, end: string, countryCode: strin
 }
 
 export function expectedProgress(task: ProgressPlan, date: string, checkpoint: DayCheckpoint = "day"): number {
+  if (task.scheduleAssigned === false) return 0;
   if (date < task.plannedStart) return 0;
   if (date > task.plannedEnd || (date === task.plannedEnd && checkpoint === "day")) return 100;
   const leaveReduction = (task.ownerLeaves ?? []).reduce((sum, leave) => {
@@ -45,14 +46,15 @@ export function expectedProgress(task: ProgressPlan, date: string, checkpoint: D
   return Math.min(100, Math.round((elapsed / available) * 100));
 }
 
-export function isTaskDelayed(task: Pick<WbsTask, "finalized" | "status" | "progress" | "plannedStart" | "plannedEnd" | "businessDays" | "countryCode" | "ownerLeaves">, date: string): boolean {
+export function isTaskDelayed(task: Pick<WbsTask, "finalized" | "status" | "progress" | "plannedStart" | "plannedEnd" | "businessDays" | "countryCode" | "scheduleAssigned" | "ownerLeaves">, date: string): boolean {
+  if (task.scheduleAssigned === false) return false;
   return task.finalized && task.status !== "completed" && task.progress < expectedProgress(task, date);
 }
 
 export type ProgressHealth = "untracked" | "ahead" | "on-track" | "behind";
 
-export function progressHealth(task: Pick<WbsTask, "finalized" | "progress" | "plannedStart" | "plannedEnd" | "businessDays" | "countryCode" | "ownerLeaves">, date: string): ProgressHealth {
-  if (!task.finalized) return "untracked";
+export function progressHealth(task: Pick<WbsTask, "finalized" | "progress" | "plannedStart" | "plannedEnd" | "businessDays" | "countryCode" | "scheduleAssigned" | "ownerLeaves">, date: string): ProgressHealth {
+  if (!task.finalized || task.scheduleAssigned === false) return "untracked";
   const planned = expectedProgress(task, date);
   if (task.progress > planned) return "ahead";
   if (task.progress < planned) return "behind";
@@ -77,10 +79,10 @@ export function buildScheduleCascade(tasks: WbsTask[], taskId: number, schedule:
   const schedules = new Map(tasks.map((task) => [task.id, taskSchedule(task)]));
   schedules.set(taskId, schedule);
   const changes: ScheduleChange[] = [{ taskId, before: taskSchedule(target), after: schedule }];
-  const movedWithoutResizing = target.plannedStart !== schedule.plannedStart && target.businessDays === schedule.businessDays;
+  const movedWithoutResizing = target.scheduleAssigned !== false && target.plannedStart !== schedule.plannedStart && target.businessDays === schedule.businessDays;
   if (movedWithoutResizing) {
     const offset = businessDayOffset(target.plannedStart, schedule.plannedStart, target.countryCode);
-    const pending = tasks.filter((task) => task.parentTaskId === target.id);
+    const pending = tasks.filter((task) => task.parentTaskId === target.id && task.scheduleAssigned !== false);
     const visitedDescendants = new Set<number>();
     while (pending.length > 0) {
       const child = pending.shift();
@@ -99,7 +101,7 @@ export function buildScheduleCascade(tasks: WbsTask[], taskId: number, schedule:
         after,
         historyContext: `親タスク「${target.title}」の移動に連動`,
       });
-      pending.push(...tasks.filter((task) => task.parentTaskId === child.id));
+      pending.push(...tasks.filter((task) => task.parentTaskId === child.id && task.scheduleAssigned !== false));
     }
   }
   let parentId = target.parentTaskId;
@@ -108,7 +110,7 @@ export function buildScheduleCascade(tasks: WbsTask[], taskId: number, schedule:
     visited.add(parentId);
     const parent = byId.get(parentId);
     if (!parent) break;
-    const children = tasks.filter((task) => task.parentTaskId === parentId);
+    const children = tasks.filter((task) => task.parentTaskId === parentId && (task.scheduleAssigned !== false || task.id === taskId));
     const childSchedules = children.map((child) => schedules.get(child.id) ?? taskSchedule(child));
     const plannedStart = childSchedules.map((item) => item.plannedStart).sort()[0];
     const sortedEnds = childSchedules.map((item) => item.plannedEnd).sort();
@@ -132,7 +134,7 @@ export function buildScheduleCascade(tasks: WbsTask[], taskId: number, schedule:
 export function deriveParentProgress(tasks: WbsTask[]): WbsTask[] {
   const children = new Map<number, WbsTask[]>();
   for (const task of tasks) {
-    if (task.parentTaskId !== null) children.set(task.parentTaskId, [...(children.get(task.parentTaskId) ?? []), task]);
+    if (task.parentTaskId !== null && task.scheduleAssigned !== false) children.set(task.parentTaskId, [...(children.get(task.parentTaskId) ?? []), task]);
   }
   const progressById = new Map<number, number>();
   const visiting = new Set<number>();
@@ -156,43 +158,6 @@ export function deriveParentProgress(tasks: WbsTask[]): WbsTask[] {
     const status = task.status === "on_hold" ? task.status : derived === 100 ? "completed" : derived > 0 ? "in_progress" : "not_started";
     return { ...task, progress: derived, status };
   });
-}
-
-export function buildScheduleCascadeForNewChild(tasks: WbsTask[], parentTaskId: number | null, schedule: TaskSchedule): ScheduleChange[] {
-  if (parentTaskId === null) return [];
-  const byId = new Map(tasks.map((task) => [task.id, task]));
-  if (!byId.has(parentTaskId)) throw new Error("親タスクが見つかりません。");
-  const schedules = new Map(tasks.map((task) => [task.id, taskSchedule(task)]));
-  const changes: ScheduleChange[] = [];
-  let currentParentId: number | null = parentTaskId;
-  let addedChildSchedule: TaskSchedule | null = schedule;
-  const visited = new Set<number>();
-  while (currentParentId !== null && !visited.has(currentParentId)) {
-    visited.add(currentParentId);
-    const parent = byId.get(currentParentId);
-    if (!parent) break;
-    const childSchedules = tasks
-      .filter((task) => task.parentTaskId === currentParentId)
-      .map((child) => schedules.get(child.id) ?? taskSchedule(child));
-    if (addedChildSchedule) childSchedules.push(addedChildSchedule);
-    const plannedStart = childSchedules.map((item) => item.plannedStart).sort()[0];
-    const sortedEnds = childSchedules.map((item) => item.plannedEnd).sort();
-    const plannedEnd = sortedEnds[sortedEnds.length - 1];
-    if (!plannedStart || !plannedEnd) break;
-    const after = {
-      plannedStart,
-      plannedEnd,
-      businessDays: Math.max(1, countBusinessDays(plannedStart, plannedEnd, parent.countryCode)),
-    };
-    const before = schedules.get(parent.id) ?? taskSchedule(parent);
-    schedules.set(parent.id, after);
-    if (before.plannedStart !== after.plannedStart || before.plannedEnd !== after.plannedEnd || before.businessDays !== after.businessDays) {
-      changes.push({ taskId: parent.id, before, after });
-    }
-    addedChildSchedule = null;
-    currentParentId = parent.parentTaskId;
-  }
-  return changes;
 }
 
 export function scheduleChangesRequireReason(tasks: WbsTask[], changes: ScheduleChange[]): boolean {

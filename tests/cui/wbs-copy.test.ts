@@ -18,6 +18,13 @@ describe("WBSの操作文言", () => {
     expect(appSource).toContain("小さなサブタスクとして分割すると");
   });
 
+  it("サブタスクは親日程を変えず日程未割り当てで追加する", () => {
+    expect(appSource).toContain("日程未割り当てで追加します");
+    expect(appSource).toContain("親タスクの日程は変更しません");
+    expect(appSource).toContain("scheduleAssigned: !isSubtask");
+    expect(appSource).not.toContain("buildScheduleCascadeForNewChild");
+  });
+
   it("タスク入力では担当者と表示し、営業日数の1はプレースホルダーにする", () => {
     expect(appSource).toContain("<label>担当者<select");
     expect(appSource).toContain('placeholder="1" value={form.businessDays}');
