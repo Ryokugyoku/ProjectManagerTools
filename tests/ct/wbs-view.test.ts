@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildTimelineDateRange, filterWbsTasks, parentTaskCandidates, prerequisiteTaskCandidates, type WbsFilters } from "../../src/lib/wbsView";
+import { buildTimelineDateRange, filterWbsTasks, summarizeDescendants, visibleWbsTaskTree, parentTaskCandidates, prerequisiteTaskCandidates, type WbsFilters } from "../../src/lib/wbsView";
 import type { Milestone } from "../../src/lib/milestones";
 import type { WbsTask } from "../../src/lib/wbs";
 
@@ -8,11 +8,11 @@ import type { WbsTask } from "../../src/lib/wbs";
 const base: WbsTask = { id: 1, title: "設計", description: "", projectId: 1, projectName: "案件A", parentTaskId: null, parentTaskTitle: null, ownerUserId: 2, ownerUserName: "山田", status: "in_progress", progress: 30, countryCode: "JP", plannedStart: "2026-08-06", plannedEnd: "2026-08-07", businessDays: 2, actualStart: null, actualEnd: null, finalized: false };
 const tasks = [base, { ...base, id: 2, projectId: null, projectName: null }, { ...base, id: 3, ownerUserId: null, ownerUserName: null }, { ...base, id: 4, status: "completed" as const }];
 const cases: Array<{ filters: WbsFilters; ids: number[] }> = [
-  { filters: { query: "", projectId: "all", ownerUserId: "all", status: "all" }, ids: [1, 2, 3, 4] },
-  { filters: { query: "", projectId: 1, ownerUserId: 2, status: "in_progress" }, ids: [1] },
-  { filters: { query: "", projectId: "unset", ownerUserId: 2, status: "all" }, ids: [2] },
-  { filters: { query: "", projectId: 1, ownerUserId: "unset", status: "all" }, ids: [3] },
-  { filters: { query: "", projectId: 1, ownerUserId: 2, status: "completed" }, ids: [4] },
+  { filters: { query: "", projectId: "all", ownerUserId: "all", status: "all", attention: "all" }, ids: [1, 2, 3, 4] },
+  { filters: { query: "", projectId: 1, ownerUserId: 2, status: "in_progress", attention: "all" }, ids: [1] },
+  { filters: { query: "", projectId: "unset", ownerUserId: 2, status: "all", attention: "all" }, ids: [2] },
+  { filters: { query: "", projectId: 1, ownerUserId: "unset", status: "all", attention: "unassigned" }, ids: [3] },
+  { filters: { query: "", projectId: 1, ownerUserId: 2, status: "completed", attention: "open" }, ids: [] },
 ];
 
 describe("WBS filter combinations", () => {
@@ -78,5 +78,26 @@ describe("timeline date range combinations", () => {
     expect(result.start).toBe(start);
     expect(result.end).toBe(end);
     expect(result.days).toBeGreaterThanOrEqual(minimumDays);
+  });
+});
+
+// 因子: 折りたたみ（なし/親/親子）、一致（なし/子/孫）、要確認（期限/遅延/責任者/日程）。
+// 折りたたみ時も一致した子孫への経路を残し、親の要確認件数を組み合わせどおり集計する。
+describe("hierarchy visibility and descendant attention combinations", () => {
+  const child = { ...base, id: 20, parentTaskId: 1, parentTaskTitle: "設計", ownerUserId: null, ownerUserName: null, plannedEnd: "2026-08-01" };
+  const grandchild = { ...base, id: 21, parentTaskId: 20, parentTaskTitle: "子", scheduleAssigned: false };
+  const tree = [base, child, grandchild];
+
+  it.each([
+    [[], [], [1, 20, 21]],
+    [[1], [], [1]],
+    [[1], [20], [1, 20, 21]],
+    [[1, 20], [21], [1, 20, 21]],
+  ] as const)("collapsed=%s matching=%s", (collapsed, matching, ids) => {
+    expect(visibleWbsTaskTree(tree, new Set(collapsed), new Set(matching)).map(({ task }) => task.id)).toEqual(ids);
+  });
+
+  it("combines descendant warning conditions", () => {
+    expect(summarizeDescendants(tree, 1, "2026-08-08")).toMatchObject({ count: 2, overdue: 1, unassigned: 1, scheduleUnassigned: 1 });
   });
 });

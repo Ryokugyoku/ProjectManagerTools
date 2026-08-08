@@ -22,7 +22,7 @@ import { previousBusinessDate } from "./lib/dailyReport";
 import { listProjects, type Project } from "./lib/projects";
 import { createMilestone, deleteMilestone, listMilestones, MILESTONE_COLOR_OPTIONS, updateMilestone, type Milestone, type MilestoneInput } from "./lib/milestones";
 import { MilestonePanel } from "./features/wbs/MilestonePanel";
-import { filterWbsTasks, parentTaskCandidates, prerequisiteTaskCandidates, summarizeWbsTasks, type WbsFilters, type WbsFilterValue, type WbsGroupBy } from "./lib/wbsView";
+import { filterWbsTasks, includeMatchingAncestors, parentTaskCandidates, prerequisiteTaskCandidates, summarizeWbsTasks, withoutAttention, type WbsAttentionFilter, type WbsFilters, type WbsFilterValue, type WbsGroupBy } from "./lib/wbsView";
 import { pendingApprovalLabel, summarizeLeaveApprovals } from "./lib/leaveApprovals";
 import "./App.css";
 
@@ -60,7 +60,7 @@ function App() {
   const [reschedule, setReschedule] = useState<{ task: WbsTask; changes: ScheduleChange[] } | null>(null);
   const [milestoneEditor, setMilestoneEditor] = useState<Milestone | "new" | null>(null);
   const [groupBy, setGroupBy] = useState<WbsGroupBy>("project");
-  const [filters, setFilters] = useState<WbsFilters>({ query: "", projectId: "all", ownerUserId: "all", status: "all" });
+  const [filters, setFilters] = useState<WbsFilters>({ query: "", projectId: "all", ownerUserId: "all", status: "all", attention: "all" });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -134,8 +134,10 @@ function App() {
   const roadmapTasks = useMemo(() => roadmapMode === "all" ? tasks : tasks.filter((task) => task.projectId === selectedRoadmapProjectId), [roadmapMode, selectedRoadmapProjectId, tasks]);
   const roadmapMilestones = useMemo(() => roadmapMode === "all" ? milestones : milestones.filter((milestone) => milestone.projectId === selectedRoadmapProjectId), [milestones, roadmapMode, selectedRoadmapProjectId]);
   const openTasks = useMemo(() => roadmapTasks.filter((task) => task.status !== "completed").length, [roadmapTasks]);
-  const visibleTasks = useMemo(() => filterWbsTasks(tasks, filters), [filters, tasks]);
-  const visibleSummary = useMemo(() => summarizeWbsTasks(visibleTasks, formatISODate(new Date())), [visibleTasks]);
+  const attentionBaseTasks = useMemo(() => filterWbsTasks(roadmapTasks, withoutAttention(filters), currentDate), [currentDate, filters, roadmapTasks]);
+  const matchingTasks = useMemo(() => filterWbsTasks(roadmapTasks, filters, currentDate), [currentDate, filters, roadmapTasks]);
+  const visibleTasks = useMemo(() => includeMatchingAncestors(roadmapTasks, matchingTasks), [matchingTasks, roadmapTasks]);
+  const visibleSummary = useMemo(() => summarizeWbsTasks(attentionBaseTasks, currentDate), [attentionBaseTasks, currentDate]);
   const roadmapLeaveAttention = useMemo(() => {
     const ownerUserIds = new Set(roadmapTasks.flatMap((task) => task.ownerUserId === null ? [] : [task.ownerUserId]));
     return userLeaves.map((leave) => ({ leave, approval: summarizeLeaveApprovals(leave, currentDate, settings.countryCode) }))
@@ -146,7 +148,7 @@ function App() {
     const project = projects.find((item) => item.id === filters.projectId);
     return project ? users.filter((person) => project.members.some((member) => member.userId === person.id)) : users;
   }, [users, filters.projectId, projects]);
-  const hasActiveFilters = filters.query.trim() !== "" || filters.projectId !== (roadmapMode === "all" ? "all" : selectedRoadmapProjectId) || filters.ownerUserId !== "all" || filters.status !== "all";
+  const hasActiveFilters = filters.query.trim() !== "" || filters.projectId !== (roadmapMode === "all" ? "all" : selectedRoadmapProjectId) || filters.ownerUserId !== "all" || filters.status !== "all" || filters.attention !== "all";
   const pastMissingTaskIds = useMemo(() => {
     if (!reportSnapshotsLoaded) return new Set<number>();
     const snapshotByTask = new Map(reportSnapshots.map((snapshot) => [snapshot.taskId, snapshot]));
@@ -157,7 +159,7 @@ function App() {
     setRoadmapMode("select");
     setSelectedRoadmapProjectId(null);
     setEditingTaskId(null);
-    setFilters({ query: "", projectId: "all", ownerUserId: "all", status: "all" });
+    setFilters({ query: "", projectId: "all", ownerUserId: "all", status: "all", attention: "all" });
     setView("wbs");
   }
 
@@ -165,14 +167,14 @@ function App() {
     setRoadmapMode("project");
     setSelectedRoadmapProjectId(project.id);
     setEditingTaskId(null);
-    setFilters({ query: "", projectId: project.id, ownerUserId: "all", status: "all" });
+    setFilters({ query: "", projectId: project.id, ownerUserId: "all", status: "all", attention: "all" });
   }
 
   function openAllRoadmap() {
     setRoadmapMode("all");
     setSelectedRoadmapProjectId(null);
     setEditingTaskId(null);
-    setFilters({ query: "", projectId: "all", ownerUserId: "all", status: "all" });
+    setFilters({ query: "", projectId: "all", ownerUserId: "all", status: "all", attention: "all" });
   }
 
   function openTaskCreate(parentTaskId: number | null = null) {
@@ -207,6 +209,14 @@ function App() {
     } catch (cause) { setError(toMessage(cause)); }
   }, [refresh, tasks]);
 
+  function toggleAttention(attention: Exclude<WbsAttentionFilter, "all">) {
+    setFilters((current) => ({ ...current, attention: current.attention === attention ? "all" : attention }));
+  }
+
+  function clearWbsFilters() {
+    setFilters({ query: "", projectId: roadmapMode === "all" ? "all" : selectedRoadmapProjectId ?? "all", ownerUserId: "all", status: "all", attention: "all" });
+  }
+
   return (
     <div className="app-frame">
       <aside className="app-nav" aria-label="メインナビゲーション">
@@ -240,7 +250,7 @@ function App() {
       {error && <div className="global-error error" role="alert"><span>{error}</span><button onClick={() => setError(null)}>閉じる</button></div>}
 
       {view === "home" ? (
-        <HomeScreen tasks={tasks} projects={projects} users={users} leaves={userLeaves} countryCode={settings.countryCode} today={currentDate} loading={loading} onNavigate={(nextView) => nextView === "wbs" ? openWbsProjectSelection() : setView(nextView)} onOpenTask={(task) => { setRoadmapMode(task.projectId === null ? "all" : "project"); setSelectedRoadmapProjectId(task.projectId); setFilters({ query: "", projectId: task.projectId ?? "all", ownerUserId: "all", status: "all" }); setEditingTaskId(task.id); setView("wbs"); }} />
+        <HomeScreen tasks={tasks} projects={projects} users={users} leaves={userLeaves} countryCode={settings.countryCode} today={currentDate} loading={loading} onNavigate={(nextView) => nextView === "wbs" ? openWbsProjectSelection() : setView(nextView)} onOpenTask={(task) => { setRoadmapMode(task.projectId === null ? "all" : "project"); setSelectedRoadmapProjectId(task.projectId); setFilters({ query: "", projectId: task.projectId ?? "all", ownerUserId: "all", status: "all", attention: "all" }); setEditingTaskId(task.id); setView("wbs"); }} />
       ) : view === "analysis" ? (
         <AnalysisScreen projects={projects} tasks={tasks.filter((task) => task.scheduleAssigned !== false)} today={currentDate} loading={loading} />
       ) : view === "reports" ? (
@@ -278,11 +288,11 @@ function App() {
 
           {!loading && roadmapTasks.length > 0 && <>
             <section className="wbs-summary" aria-label="表示中のWBS概要">
-              <div><span>表示中</span><strong>{visibleSummary.total}</strong><small>全{roadmapTasks.length}件</small></div>
-              <div><span>未完了</span><strong>{visibleSummary.open}</strong><small>平均進捗 {visibleSummary.averageProgress}%</small></div>
-              <div className={visibleSummary.overdue > 0 ? "attention" : ""}><span>期限超過</span><strong>{visibleSummary.overdue}</strong><small>完了以外</small></div>
-              <div className={visibleSummary.unassigned > 0 ? "attention" : ""}><span>責任者未設定</span><strong>{visibleSummary.unassigned}</strong><small>責任者の割り当て</small></div>
-              <div className={visibleSummary.scheduleUnassigned > 0 ? "attention schedule-attention" : ""}><span>日程未割り当て</span><strong>{visibleSummary.scheduleUnassigned}</strong><small>日程を入力してください</small></div>
+              <div className="summary-total"><span>集計対象</span><strong>{visibleSummary.total}</strong><small>全{roadmapTasks.length}件中 · 平均{visibleSummary.averageProgress}%</small></div>
+              <button type="button" aria-pressed={filters.attention === "open"} className={filters.attention === "open" ? "active" : ""} onClick={() => toggleAttention("open")}><span>未完了</span><strong>{visibleSummary.open}</strong><small>対象{visibleSummary.total}件中</small></button>
+              <button type="button" aria-pressed={filters.attention === "overdue"} className={`${visibleSummary.overdue > 0 ? "attention " : ""}${filters.attention === "overdue" ? "active" : ""}`} onClick={() => toggleAttention("overdue")}><span>期限超過</span><strong>{visibleSummary.overdue}</strong><small>対象{visibleSummary.total}件中</small></button>
+              <button type="button" aria-pressed={filters.attention === "unassigned"} className={`${visibleSummary.unassigned > 0 ? "attention " : ""}${filters.attention === "unassigned" ? "active" : ""}`} onClick={() => toggleAttention("unassigned")}><span>責任者未設定</span><strong>{visibleSummary.unassigned}</strong><small>対象{visibleSummary.total}件中</small></button>
+              <button type="button" aria-pressed={filters.attention === "schedule_unassigned"} className={`${visibleSummary.scheduleUnassigned > 0 ? "attention schedule-attention " : ""}${filters.attention === "schedule_unassigned" ? "active" : ""}`} onClick={() => toggleAttention("schedule_unassigned")}><span>日程未割り当て</span><strong>{visibleSummary.scheduleUnassigned}</strong><small>対象{visibleSummary.total}件中</small></button>
             </section>
             <section className="wbs-controls" aria-label="WBSの表示条件">
               <label className="search-field"><span>検索</span><input type="search" value={filters.query} onChange={(event) => setFilters({ ...filters, query: event.currentTarget.value })} placeholder="WBS名・責任者" /></label>
@@ -290,10 +300,11 @@ function App() {
               <label><span>責任者</span><select value={filters.ownerUserId} onChange={(event) => setFilters({ ...filters, ownerUserId: parseFilterValue(event.currentTarget.value) })}><option value="all">すべての責任者</option><option value="unset">未設定</option>{filterUserProfiles.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label>
               <label><span>状態</span><select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.currentTarget.value as WbsFilters["status"] })}><option value="all">すべての状態</option>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
               <fieldset className="group-switch"><legend>まとめ方</legend><button type="button" className={groupBy === "project" ? "active" : ""} aria-pressed={groupBy === "project"} onClick={() => setGroupBy("project")}>案件</button><button type="button" className={groupBy === "user" ? "active" : ""} aria-pressed={groupBy === "user"} onClick={() => setGroupBy("user")}>責任者</button></fieldset>
+              {hasActiveFilters && <button type="button" className="clear-filters" onClick={clearWbsFilters}>すべての条件を解除</button>}
             </section>
           </>}
 
-          {loading ? <div className="loading-card">WBSを読み込んでいます…</div> : roadmapTasks.length === 0 && roadmapMilestones.length === 0 ? <section className="wbs-empty"><span>▦</span><h2>{roadmapMode === "all" ? "最初のWBSを追加しましょう" : "このプロジェクトの最初のタスクを追加しましょう"}</h2><p>責任者と日程を紐づけると、ロードマップ上で予定と進捗をまとめて確認できます。</p><button className="primary-button" onClick={() => openTaskCreate()}>＋ ロードマップにタスクを追加</button></section> : visibleTasks.length === 0 && roadmapTasks.length > 0 ? <section className="wbs-empty filtered"><span>⌕</span><h2>条件に一致するWBSがありません</h2><p>検索語または絞り込み条件を変更してください。</p>{hasActiveFilters && <button className="quiet-button" onClick={() => setFilters({ query: "", projectId: roadmapMode === "all" ? "all" : selectedRoadmapProjectId ?? "all", ownerUserId: "all", status: "all" })}>絞り込みを解除</button>}</section> : <TimelineBoard tasks={visibleTasks} allTasks={roadmapTasks} milestones={roadmapMilestones.filter((milestone) => filters.projectId === "all" || milestone.projectId === filters.projectId)} users={users} projects={projects} groupBy={groupBy} countryCode={settings.countryCode} pastMissingTaskIds={pastMissingTaskIds} onEdit={(task) => setEditingTaskId(task.id)} onCreateSubtask={(task) => openTaskCreate(task.id)} onShowHistory={setHistoryTask} onRecordProgress={openProgress} onSelectMilestone={setMilestoneEditor} onScheduleChange={updateSchedule} />}
+          {loading ? <div className="loading-card">WBSを読み込んでいます…</div> : roadmapTasks.length === 0 && roadmapMilestones.length === 0 ? <section className="wbs-empty"><span>▦</span><h2>{roadmapMode === "all" ? "最初のWBSを追加しましょう" : "このプロジェクトの最初のタスクを追加しましょう"}</h2><p>責任者と日程を紐づけると、ロードマップ上で予定と進捗をまとめて確認できます。</p><button className="primary-button" onClick={() => openTaskCreate()}>＋ ロードマップにタスクを追加</button></section> : matchingTasks.length === 0 && roadmapTasks.length > 0 ? <section className="wbs-empty filtered"><span>⌕</span><h2>条件に一致するWBSがありません</h2><p>検索語または絞り込み条件を変更してください。</p>{hasActiveFilters && <button className="quiet-button" onClick={clearWbsFilters}>絞り込みを解除</button>}</section> : <TimelineBoard tasks={visibleTasks} allTasks={roadmapTasks} matchingTaskIds={hasActiveFilters ? new Set(matchingTasks.map((task) => task.id)) : new Set()} milestones={roadmapMilestones.filter((milestone) => filters.projectId === "all" || milestone.projectId === filters.projectId)} users={users} projects={projects} groupBy={groupBy} countryCode={settings.countryCode} pastMissingTaskIds={pastMissingTaskIds} onEdit={(task) => setEditingTaskId(task.id)} onCreateSubtask={(task) => openTaskCreate(task.id)} onShowHistory={setHistoryTask} onRecordProgress={openProgress} onSelectMilestone={setMilestoneEditor} onScheduleChange={updateSchedule} />}
         </main>
       )}
 

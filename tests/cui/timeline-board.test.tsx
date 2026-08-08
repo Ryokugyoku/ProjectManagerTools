@@ -52,6 +52,8 @@ describe("WBSロードマップのタスク操作", () => {
     expect(markup).not.toContain("task-selection-badge");
     expect(markup).not.toContain("選択中");
     expect(markup).toContain("編集中");
+    expect(markup).toContain('aria-label="選択表示を確認するの操作メニュー。編集、進捗入力、作業経緯、サブタスク追加"');
+    expect(markup).toContain(">…</button>");
   });
 
   it("日付セルはヘッダーだけに描画し、各タスク行では共有背景を使う", () => {
@@ -74,6 +76,19 @@ describe("WBSロードマップのタスク操作", () => {
     }} />);
     expect(markup).toContain('roadmap-row parent-task');
     expect(markup).toContain('timeline-bar in_progress untracked has-children');
+    expect(markup).toContain('aria-expanded="true"');
+    expect(markup).toContain("配下1件");
+    expect(markup).toContain("すべて展開");
+    expect(markup).toContain("すべて折りたたむ");
+  });
+
+  it("過去営業日の進捗が未入力なら操作付近に要入力を示す", () => {
+    const markup = renderToStaticMarkup(<TimelineBoard {...{
+      tasks: [task], milestones: [], users: [], projects: [], groupBy: "project" as const,
+      countryCode: "JP", pastMissingTaskIds: new Set([task.id]), onEdit: vi.fn(), onCreateSubtask: vi.fn(), onShowHistory: vi.fn(),
+      onRecordProgress: vi.fn(), onSelectMilestone: vi.fn(), onScheduleChange: vi.fn(),
+    }} />);
+    expect(markup).toContain('class="task-attention-badge">要入力');
   });
 
   it("担当者の午前半休と午後半休を日付セルの左右で示す", () => {

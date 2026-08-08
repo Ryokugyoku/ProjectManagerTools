@@ -64,6 +64,25 @@ describe("WBSの操作文言", () => {
     expect(appSource).not.toContain('aria-label="進捗率" type="range"');
     expect(timelineSource).toContain(">タスクを編集</button>");
     expect(timelineSource).toContain("onEdit(task)");
+    expect(timelineSource).toContain("onContextMenu={(event) => openContextMenu(event, task)}");
+    expect(timelineSource).toContain('event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")');
+    expect(timelineSource).toContain("openActionMenu(event, task)");
+    expect(timelineSource).toContain("role=\"menu\"");
+  });
+
+  it("ドラッグ中の日程プレビューと階層のARIA状態を提供する", () => {
+    expect(timelineSource).toContain('className="schedule-preview" aria-live="polite"');
+    expect(timelineSource).toContain("dragPreview.schedule.businessDays");
+    expect(timelineSource).toContain("aria-expanded={expanded}");
+    expect(timelineSource).toContain("すべて折りたたむ");
+  });
+
+  it("要対応集計をトグルし、すべての条件を解除できる", () => {
+    expect(appSource).toContain('aria-pressed={filters.attention === "overdue"}');
+    expect(appSource).toContain('toggleAttention("unassigned")');
+    expect(appSource).toContain('toggleAttention("schedule_unassigned")');
+    expect(appSource).toContain("すべての条件を解除");
+    expect(appSource).toContain("includeMatchingAncestors");
   });
 
   it("同階層から完了前提タスクを選べる", () => {

@@ -1,13 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  addCalendarDays, calculateEndDate, formatISODate, holidayName, isBusinessDay,
-  parseISODate, shiftBusinessDate,
-} from "../../lib/calendar";
+import { addCalendarDays, calculateEndDate, formatISODate, holidayName, isBusinessDay, parseISODate } from "../../lib/calendar";
 import type { Project } from "../../lib/projects";
 import { milestoneColorTokens, type Milestone } from "../../lib/milestones";
 import type { UserProfile, WbsTask } from "../../lib/wbs";
 import { currentDayCheckpoint, expectedProgress, progressHealth } from "../../lib/wbsPlanning";
-import { buildTimelineDateRange, buildTimelineMonths, buildWbsGroups, dailyProgressActionLabel, flattenWbsTaskTree, type WbsGroupBy } from "../../lib/wbsView";
+import { buildTimelineDateRange, buildTimelineMonths, buildWbsGroups, calculateSchedulePreview, dailyProgressActionLabel, summarizeDescendants, visibleWbsTaskTree, type WbsGroupBy } from "../../lib/wbsView";
 import { summarizeLeaveApprovals } from "../../lib/leaveApprovals";
 
 const DAY_WIDTH = 42;
@@ -25,9 +22,10 @@ type DragSession = {
 };
 type ContextMenuState = { task: WbsTask; x: number; y: number };
 
-export function TimelineBoard({ tasks, allTasks = tasks, milestones, users, projects, groupBy, countryCode, pastMissingTaskIds = new Set(), onEdit, onCreateSubtask, onShowHistory, onRecordProgress, onSelectMilestone, onScheduleChange }: {
+export function TimelineBoard({ tasks, allTasks = tasks, matchingTaskIds = new Set(), milestones, users, projects, groupBy, countryCode, pastMissingTaskIds = new Set(), onEdit, onCreateSubtask, onShowHistory, onRecordProgress, onSelectMilestone, onScheduleChange }: {
   tasks: WbsTask[];
   allTasks?: WbsTask[];
+  matchingTaskIds?: Set<number>;
   milestones: Milestone[];
   users: UserProfile[];
   projects: Project[];
@@ -42,6 +40,8 @@ export function TimelineBoard({ tasks, allTasks = tasks, milestones, users, proj
   onScheduleChange: (task: WbsTask, schedule: Schedule) => Promise<void>;
 }) {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [collapsedIds, setCollapsedIds] = useState<Set<number>>(() => new Set());
+  const [dragPreview, setDragPreview] = useState<{ taskTitle: string; schedule: Schedule } | null>(null);
   const [visibleMonth, setVisibleMonth] = useState("");
   const didDrag = useRef(false);
   const dragRef = useRef<DragSession | null>(null);
@@ -101,6 +101,20 @@ export function TimelineBoard({ tasks, allTasks = tasks, milestones, users, proj
     });
   }
 
+  function openActionMenu(event: React.MouseEvent<HTMLButtonElement>, task: WbsTask) {
+    event.stopPropagation();
+    const rect = event.currentTarget.getBoundingClientRect();
+    setContextMenu({ task, x: Math.max(8, Math.min(rect.right - 210, window.innerWidth - 220)), y: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - 190)) });
+  }
+
+  function toggleCollapsed(taskId: number) {
+    setCollapsedIds((current) => {
+      const next = new Set(current);
+      if (next.has(taskId)) next.delete(taskId); else next.add(taskId);
+      return next;
+    });
+  }
+
   useEffect(() => { updateVisibleMonthNow(); }, [range.start]);
 
   useEffect(() => {
@@ -135,18 +149,9 @@ export function TimelineBoard({ tasks, allTasks = tasks, milestones, users, proj
       if (delta === current.delta) return;
       if (delta !== 0) didDrag.current = true;
       const source = current.task;
-      let plannedStart = source.plannedStart;
-      let businessDays = source.businessDays;
-      if (current.mode === "move") {
-        plannedStart = shiftBusinessDate(source.plannedStart, delta, countryCode);
-      } else if (current.mode === "right") {
-        businessDays = Math.max(1, source.businessDays + delta);
-      } else {
-        businessDays = Math.max(1, source.businessDays - delta);
-        plannedStart = shiftBusinessDate(source.plannedStart, source.businessDays - businessDays, countryCode);
-      }
       current.delta = delta;
-      current.preview = { plannedStart, businessDays, plannedEnd: calculateEndDate(plannedStart, businessDays, countryCode) };
+      current.preview = calculateSchedulePreview(source, current.mode, delta, countryCode);
+      setDragPreview({ taskTitle: source.title, schedule: current.preview });
       if (dragFrameRef.current !== null) return;
       dragFrameRef.current = requestAnimationFrame(() => {
         dragFrameRef.current = null;
@@ -161,6 +166,7 @@ export function TimelineBoard({ tasks, allTasks = tasks, milestones, users, proj
       if (!current) return;
       dragRef.current = null;
       restoreDragElement(current);
+      setDragPreview(null);
       if (current && (current.preview.plannedStart !== current.task.plannedStart || current.preview.businessDays !== current.task.businessDays)) {
         void onScheduleChange(current.task, current.preview);
       }
@@ -170,6 +176,7 @@ export function TimelineBoard({ tasks, allTasks = tasks, milestones, users, proj
       if (!current) return;
       dragRef.current = null;
       restoreDragElement(current);
+      setDragPreview(null);
       didDrag.current = false;
     }
     window.addEventListener("pointermove", move);
@@ -204,6 +211,7 @@ export function TimelineBoard({ tasks, allTasks = tasks, milestones, users, proj
       originalWidth: element.style.width,
     };
     dragRef.current = session;
+    setDragPreview({ taskTitle: task.title, schedule: session.preview });
     element.classList.add("dragging");
   }
 
@@ -221,21 +229,21 @@ export function TimelineBoard({ tasks, allTasks = tasks, milestones, users, proj
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
     event.preventDefault();
     const delta = event.key === "ArrowRight" ? 1 : -1;
-    let plannedStart = task.plannedStart;
-    let businessDays = task.businessDays;
-    if (mode === "move") plannedStart = shiftBusinessDate(task.plannedStart, delta, countryCode);
-    else if (mode === "right") businessDays = Math.max(1, task.businessDays + delta);
-    else {
-      businessDays = Math.max(1, task.businessDays - delta);
-      plannedStart = shiftBusinessDate(task.plannedStart, task.businessDays - businessDays, countryCode);
-    }
-    await onScheduleChange(task, { plannedStart, businessDays, plannedEnd: calculateEndDate(plannedStart, businessDays, countryCode) });
+    await onScheduleChange(task, calculateSchedulePreview(task, mode, delta, countryCode));
   }
+
+  const menuProgressLabel = contextMenu ? dailyProgressActionLabel(
+    contextMenu.task,
+    allTasks.some((candidate) => candidate.parentTaskId === contextMenu.task.id),
+    pastMissingTaskIds.has(contextMenu.task.id),
+  ) : null;
 
   return <section className="roadmap-card" aria-label="WBSロードマップ">
     <div className="roadmap-toolbar">
       <div><strong>ロードマップ</strong><span>{groupBy === "project" ? "案件" : "責任者"}ごとに表示</span><span className="visible-month" aria-live="polite">表示中：{visibleMonth}</span></div>
       <div className="range-controls" aria-label="時間軸の移動">
+        <button onClick={() => setCollapsedIds(new Set())}>すべて展開</button>
+        <button onClick={() => setCollapsedIds(new Set(allTasks.filter((task) => allTasks.some((candidate) => candidate.parentTaskId === task.id)).map((task) => task.id)))}>すべて折りたたむ</button>
         <button aria-label="2週間前へ移動" onClick={() => scrollByDays(-14)}>‹ 2週間</button>
         <button onClick={() => scrollToDate(today)}>今日へ</button>
         <button aria-label="2週間後へ移動" onClick={() => scrollByDays(14)}>2週間 ›</button>
@@ -250,18 +258,27 @@ export function TimelineBoard({ tasks, allTasks = tasks, milestones, users, proj
         </div>
         {groups.map((group) => <div className="roadmap-group" key={group.key}>
           <div className="group-heading"><span className="avatar">{group.initials}</span><strong>{group.label}</strong><small>{group.detail}</small><span className="group-count">{group.tasks.length}件</span></div>
-          {flattenWbsTaskTree(group.tasks).map(({ task, depth }) => {
+          {visibleWbsTaskTree(group.tasks, collapsedIds, matchingTaskIds).map(({ task, depth }) => {
             const scheduleAssigned = task.scheduleAssigned !== false;
             const left = scheduleAssigned ? dayDifference(range.start, task.plannedStart) * DAY_WIDTH : 0;
             const width = scheduleAssigned ? Math.max(DAY_WIDTH, (dayDifference(task.plannedStart, task.plannedEnd) + 1) * DAY_WIDTH) : 0;
             const hasChildren = allTasks.some((candidate) => candidate.parentTaskId === task.id);
+            const descendantAttention = hasChildren ? summarizeDescendants(allTasks, task.id, today) : null;
+            const forcedExpanded = hasMatchingDescendant(allTasks, task.id, matchingTaskIds);
+            const expanded = !collapsedIds.has(task.id) || forcedExpanded;
             const plannedProgress = expectedProgress(task, today, currentDayCheckpoint());
             const health = progressHealth(task, today);
             return <div className={`roadmap-row ${hasChildren ? "parent-task" : ""} ${!scheduleAssigned ? "schedule-unassigned" : ""}`} key={task.id} onContextMenu={(event) => openContextMenu(event, task)} onKeyDown={(event) => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) openContextMenu(event, task); }}>
-              <button className="task-info" style={{ "--task-depth": depth } as React.CSSProperties} onClick={() => onEdit(task)} aria-label={`${task.title}を編集`}>
-                <span className="task-title-line"><strong>{depth > 0 && <span className="task-branch" aria-hidden="true">↳</span>}{task.title}</strong></span>
-                <small>{!scheduleAssigned ? "日程未割り当て" : task.finalized ? "確定" : "編集中"} · {task.parentTaskTitle ? `親: ${task.parentTaskTitle} · ` : ""}{task.ownerUserName ?? "責任者未設定"}</small>
-              </button>
+              <div className="task-info" style={{ "--task-depth": depth } as React.CSSProperties}>
+                {hasChildren && <button type="button" className="task-expand" onClick={() => toggleCollapsed(task.id)} aria-expanded={expanded} aria-label={`${task.title}のサブタスクを${expanded ? "折りたたむ" : "展開"}`}>{expanded ? "⌄" : "›"}</button>}
+                <button className="task-main" onClick={() => onEdit(task)} aria-label={`${task.title}を編集`}>
+                  <span className="task-title-line"><strong>{depth > 0 && <span className="task-branch" aria-hidden="true">↳</span>}{task.title}</strong></span>
+                  <small>{!scheduleAssigned ? "日程未割り当て" : task.finalized ? "確定" : "編集中"} · {task.parentTaskTitle ? `親: ${task.parentTaskTitle} · ` : ""}{task.ownerUserName ?? "責任者未設定"}</small>
+                  {descendantAttention && <span className="descendant-summary">配下{descendantAttention.count}件{[descendantAttention.overdue && `期限超過${descendantAttention.overdue}`, descendantAttention.delayed && `進捗遅延${descendantAttention.delayed}`, descendantAttention.unassigned && `責任者未設定${descendantAttention.unassigned}`, descendantAttention.scheduleUnassigned && `日程未設定${descendantAttention.scheduleUnassigned}`].filter(Boolean).map((label) => <i key={String(label)}>{label}</i>)}</span>}
+                </button>
+                {pastMissingTaskIds.has(task.id) && !hasChildren && <span className="task-attention-badge">要入力</span>}
+                <button type="button" className="task-actions" onClick={(event) => openActionMenu(event, task)} aria-label={`${task.title}の操作メニュー。編集、進捗入力、作業経緯、サブタスク追加`}>…</button>
+              </div>
               <span className={`status-cell ${task.status}`}>{scheduleAssigned ? statusLabel(task.status) : "日程未設定"}</span>
               <span className={`progress-cell ${health}`} title={`${hasChildren ? "子タスクから自動集計" : "実績"} ${task.progress}% / 今日の予定 ${plannedProgress}%`}><strong>{task.progress}%</strong><small>{hasChildren ? "子から集計" : `予定 ${plannedProgress}%`}</small></span>
               <div className="timeline-cells" style={{ backgroundImage: timelineBackground }}>
@@ -282,9 +299,10 @@ export function TimelineBoard({ tasks, allTasks = tasks, milestones, users, proj
       </div>
     </div>
     <div className="roadmap-help"><strong>横にスクロールして期間を確認</strong><span>中央をドラッグ：開始日を移動</span><span>左右端をドラッグ：営業日数を変更</span><span>← → キーでも調整可能</span></div>
+    {dragPreview && <output className="schedule-preview" aria-live="polite"><strong>{dragPreview.taskTitle}の変更後予定</strong><span>開始 {formatScheduleDate(dragPreview.schedule.plannedStart)}</span><span>終了 {formatScheduleDate(dragPreview.schedule.plannedEnd)}</span><span>{dragPreview.schedule.businessDays}営業日</span></output>}
     {contextMenu && <div className="task-context-menu" ref={contextMenuRef} role="menu" aria-label={`${contextMenu.task.title}の操作`} style={{ left: contextMenu.x, top: contextMenu.y }}>
       <button role="menuitem" onClick={() => { const task = contextMenu.task; setContextMenu(null); onEdit(task); }}>タスクを編集</button>
-      {dailyProgressActionLabel(contextMenu.task, allTasks.some((candidate) => candidate.parentTaskId === contextMenu.task.id), pastMissingTaskIds.has(contextMenu.task.id)) && <button role="menuitem" onClick={() => { const task = contextMenu.task; setContextMenu(null); onRecordProgress(task); }}>{dailyProgressActionLabel(contextMenu.task, false, pastMissingTaskIds.has(contextMenu.task.id))}</button>}
+      {menuProgressLabel && <button role="menuitem" onClick={() => { const task = contextMenu.task; setContextMenu(null); onRecordProgress(task); }}>{menuProgressLabel}</button>}
       <button role="menuitem" onClick={() => { const task = contextMenu.task; setContextMenu(null); onShowHistory(task); }}>作業経緯を表示</button>
       <button role="menuitem" onClick={() => { const task = contextMenu.task; setContextMenu(null); onCreateSubtask(task); }}>＋ サブタスクを追加</button>
     </div>}
@@ -311,6 +329,22 @@ function dayDifference(from: string, to: string) { return Math.round((parseISODa
 function statusLabel(status: WbsTask["status"]) { return { not_started: "未着手", in_progress: "進行中", completed: "完了", on_hold: "保留" }[status]; }
 function leaveUnitLabel(unit: "full_day" | "morning" | "afternoon") { return { full_day: "全休", morning: "午前半休", afternoon: "午後半休" }[unit]; }
 function formatMilestoneDate(value: string) { return new Intl.DateTimeFormat("ja-JP", { year: "numeric", month: "short", day: "numeric" }).format(parseISODate(value)); }
+function formatScheduleDate(value: string) { return new Intl.DateTimeFormat("ja-JP", { month: "numeric", day: "numeric", weekday: "short" }).format(parseISODate(value)); }
+function hasMatchingDescendant(tasks: WbsTask[], parentId: number, matchingIds: ReadonlySet<number>) {
+  const pending = [parentId];
+  const visited = new Set<number>();
+  while (pending.length > 0) {
+    const id = pending.pop()!;
+    if (visited.has(id)) continue;
+    visited.add(id);
+    for (const task of tasks) {
+      if (task.parentTaskId !== id) continue;
+      if (matchingIds.has(task.id)) return true;
+      pending.push(task.id);
+    }
+  }
+  return false;
+}
 
 function buildTimelineBackground(dates: string[], countryCode: string, milestonesByDate: Map<string, Milestone[]>, today: string) {
   const segments: { color: string; start: number; end: number }[] = [];

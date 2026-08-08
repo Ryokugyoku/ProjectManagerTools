@@ -1,16 +1,18 @@
 import type { Project } from "./projects";
-import { addCalendarDays, parseISODate } from "./calendar";
+import { addCalendarDays, calculateEndDate, parseISODate, shiftBusinessDate } from "./calendar";
 import type { Milestone } from "./milestones";
 import type { UserProfile, WbsStatus, WbsTask } from "./wbs";
 import { isTaskDelayed } from "./wbsPlanning";
 
 export type WbsGroupBy = "project" | "user";
 export type WbsFilterValue = "all" | "unset" | number;
+export type WbsAttentionFilter = "all" | "open" | "overdue" | "unassigned" | "schedule_unassigned";
 export type WbsFilters = {
   query: string;
   projectId: WbsFilterValue;
   ownerUserId: WbsFilterValue;
   status: "all" | WbsStatus;
+  attention: WbsAttentionFilter;
 };
 
 export type WbsGroup = {
@@ -22,9 +24,29 @@ export type WbsGroup = {
 };
 
 export type WbsTreeItem = { task: WbsTask; depth: number };
+export type DescendantAttention = {
+  count: number;
+  overdue: number;
+  delayed: number;
+  unassigned: number;
+  scheduleUnassigned: number;
+};
 
 export type TimelineDateRange = { start: string; end: string; days: number };
 export type TimelineMonth = { key: string; label: string; days: number };
+export type SchedulePreview = { plannedStart: string; plannedEnd: string; businessDays: number };
+
+export function calculateSchedulePreview(task: Pick<WbsTask, "plannedStart" | "businessDays">, mode: "move" | "left" | "right", delta: number, countryCode: string): SchedulePreview {
+  let plannedStart = task.plannedStart;
+  let businessDays = task.businessDays;
+  if (mode === "move") plannedStart = shiftBusinessDate(task.plannedStart, delta, countryCode);
+  else if (mode === "right") businessDays = Math.max(1, task.businessDays + delta);
+  else {
+    businessDays = Math.max(1, task.businessDays - delta);
+    plannedStart = shiftBusinessDate(task.plannedStart, task.businessDays - businessDays, countryCode);
+  }
+  return { plannedStart, businessDays, plannedEnd: calculateEndDate(plannedStart, businessDays, countryCode) };
+}
 
 export function buildTimelineDateRange(
   tasks: WbsTask[],
@@ -62,7 +84,7 @@ export function buildTimelineMonths(dates: string[]): TimelineMonth[] {
   return months;
 }
 
-export function filterWbsTasks(tasks: WbsTask[], filters: WbsFilters): WbsTask[] {
+export function filterWbsTasks(tasks: WbsTask[], filters: WbsFilters, today = new Date().toLocaleDateString("sv-SE")): WbsTask[] {
   const query = filters.query.trim().toLocaleLowerCase("ja-JP");
   return tasks.filter((task) => {
     const searchable = [task.title, task.description, task.projectName ?? "", task.ownerUserName ?? ""]
@@ -71,8 +93,30 @@ export function filterWbsTasks(tasks: WbsTask[], filters: WbsFilters): WbsTask[]
     return (!query || searchable.includes(query))
       && matchesId(task.projectId, filters.projectId)
       && matchesId(task.ownerUserId, filters.ownerUserId)
-      && (filters.status === "all" || task.status === filters.status);
+      && (filters.status === "all" || task.status === filters.status)
+      && matchesAttention(task, filters.attention, today);
   });
+}
+
+export function withoutAttention(filters: WbsFilters): WbsFilters {
+  return { ...filters, attention: "all" };
+}
+
+export function includeMatchingAncestors(tasks: WbsTask[], matches: WbsTask[]): WbsTask[] {
+  const byId = new Map(tasks.map((task) => [task.id, task]));
+  const visible = new Set(matches.map((task) => task.id));
+  for (const match of matches) {
+    const visited = new Set<number>([match.id]);
+    let parentId = match.parentTaskId;
+    while (parentId !== null && !visited.has(parentId)) {
+      visited.add(parentId);
+      const parent = byId.get(parentId);
+      if (!parent) break;
+      visible.add(parent.id);
+      parentId = parent.parentTaskId;
+    }
+  }
+  return tasks.filter((task) => visible.has(task.id));
 }
 
 export function summarizeWbsTasks(tasks: WbsTask[], today: string) {
@@ -82,7 +126,7 @@ export function summarizeWbsTasks(tasks: WbsTask[], today: string) {
     open: open.length,
     overdue: open.filter((task) => task.scheduleAssigned !== false && task.plannedEnd < today).length,
     delayed: open.filter((task) => isTaskDelayed(task, today)).length,
-    unassigned: tasks.filter((task) => task.projectId === null || task.ownerUserId === null).length,
+    unassigned: tasks.filter((task) => task.ownerUserId === null).length,
     scheduleUnassigned: tasks.filter((task) => task.scheduleAssigned === false).length,
     averageProgress: tasks.length
       ? Math.round(tasks.reduce((sum, task) => sum + task.progress, 0) / tasks.length)
@@ -144,8 +188,84 @@ export function flattenWbsTaskTree(tasks: WbsTask[]): WbsTreeItem[] {
     for (const child of children.get(task.id) ?? []) append(child, depth + 1);
   }
   for (const root of children.get(null) ?? []) append(root, 0);
-  for (const task of tasks) append(task, 0);
+  for (const task of tasks) {
+    if (visited.has(task.id)) continue;
+    let parentId = task.parentTaskId;
+    const ancestorIds = new Set<number>();
+    let hiddenByVisitedAncestor = false;
+    while (parentId !== null && taskIds.has(parentId) && !ancestorIds.has(parentId)) {
+      if (visited.has(parentId)) { hiddenByVisitedAncestor = true; break; }
+      ancestorIds.add(parentId);
+      parentId = tasks.find((candidate) => candidate.id === parentId)?.parentTaskId ?? null;
+    }
+    if (hiddenByVisitedAncestor) continue;
+    append(task, 0);
+  }
   return result;
+}
+
+export function visibleWbsTaskTree(tasks: WbsTask[], collapsedIds: ReadonlySet<number>, revealedIds: ReadonlySet<number> = new Set()): WbsTreeItem[] {
+  const taskIds = new Set(tasks.map((task) => task.id));
+  const children = new Map<number | null, WbsTask[]>();
+  for (const task of tasks) {
+    const parentId = task.parentTaskId !== null && taskIds.has(task.parentTaskId) ? task.parentTaskId : null;
+    children.set(parentId, [...(children.get(parentId) ?? []), task]);
+  }
+  const hasRevealedDescendant = new Set<number>();
+  for (const task of tasks) {
+    if (!revealedIds.has(task.id)) continue;
+    let parentId = task.parentTaskId;
+    const visited = new Set<number>();
+    while (parentId !== null && !visited.has(parentId)) {
+      visited.add(parentId);
+      hasRevealedDescendant.add(parentId);
+      parentId = taskIds.has(parentId) ? tasks.find((candidate) => candidate.id === parentId)?.parentTaskId ?? null : null;
+    }
+  }
+  const result: WbsTreeItem[] = [];
+  const visited = new Set<number>();
+  function append(task: WbsTask, depth: number) {
+    if (visited.has(task.id)) return;
+    visited.add(task.id);
+    result.push({ task, depth });
+    if (collapsedIds.has(task.id) && !hasRevealedDescendant.has(task.id)) return;
+    for (const child of children.get(task.id) ?? []) append(child, depth + 1);
+  }
+  for (const root of children.get(null) ?? []) append(root, 0);
+  for (const task of tasks) {
+    if (visited.has(task.id)) continue;
+    let parentId = task.parentTaskId;
+    const ancestorIds = new Set<number>();
+    let hiddenByVisitedAncestor = false;
+    while (parentId !== null && taskIds.has(parentId) && !ancestorIds.has(parentId)) {
+      if (visited.has(parentId)) { hiddenByVisitedAncestor = true; break; }
+      ancestorIds.add(parentId);
+      parentId = tasks.find((candidate) => candidate.id === parentId)?.parentTaskId ?? null;
+    }
+    if (hiddenByVisitedAncestor) continue;
+    append(task, 0);
+  }
+  return result;
+}
+
+export function summarizeDescendants(tasks: WbsTask[], parentId: number, today: string): DescendantAttention {
+  const descendants: WbsTask[] = [];
+  const pending = [parentId];
+  const visited = new Set<number>();
+  while (pending.length > 0) {
+    const id = pending.pop()!;
+    if (visited.has(id)) continue;
+    visited.add(id);
+    for (const task of tasks) if (task.parentTaskId === id) { descendants.push(task); pending.push(task.id); }
+  }
+  const open = descendants.filter((task) => task.status !== "completed");
+  return {
+    count: descendants.length,
+    overdue: open.filter((task) => task.scheduleAssigned !== false && task.plannedEnd < today).length,
+    delayed: open.filter((task) => isTaskDelayed(task, today)).length,
+    unassigned: descendants.filter((task) => task.ownerUserId === null).length,
+    scheduleUnassigned: descendants.filter((task) => task.scheduleAssigned === false).length,
+  };
 }
 
 export function parentTaskCandidates(tasks: WbsTask[], projectId: number | null, currentTaskId: number | null): WbsTask[] {
@@ -209,10 +329,23 @@ export function dailyProgressActionLabel(task: Pick<WbsTask, "todayDailyProgress
   return task.todayDailyProgress == null ? "今日進んだ進捗を入力" : "今日の進捗を編集";
 }
 
+export function taskActionLabels(task: Pick<WbsTask, "todayDailyProgress">, hasChildren: boolean, hasPastMissing = false): string[] {
+  const progress = dailyProgressActionLabel(task, hasChildren, hasPastMissing);
+  return ["タスクを編集", ...(progress ? [progress] : []), "作業経緯を表示", "＋ サブタスクを追加"];
+}
+
 function matchesId(actual: number | null, filter: WbsFilterValue) {
   if (filter === "all") return true;
   if (filter === "unset") return actual === null;
   return actual === filter;
+}
+
+function matchesAttention(task: WbsTask, filter: WbsAttentionFilter, today: string) {
+  if (filter === "all") return true;
+  if (filter === "open") return task.status !== "completed";
+  if (filter === "overdue") return task.status !== "completed" && task.scheduleAssigned !== false && task.plannedEnd < today;
+  if (filter === "unassigned") return task.ownerUserId === null;
+  return task.scheduleAssigned === false;
 }
 
 function initials(name: string) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ancestorTrail, buildTimelineDateRange, buildTimelineMonths, buildWbsGroups, dailyProgressActionLabel, filterWbsTasks, flattenWbsTaskTree, parentTaskCandidates, prerequisiteTaskCandidates, summarizeWbsTasks, type WbsFilters } from "../../src/lib/wbsView";
+import { ancestorTrail, buildTimelineDateRange, buildTimelineMonths, buildWbsGroups, calculateSchedulePreview, dailyProgressActionLabel, filterWbsTasks, flattenWbsTaskTree, includeMatchingAncestors, parentTaskCandidates, prerequisiteTaskCandidates, summarizeDescendants, summarizeWbsTasks, taskActionLabels, visibleWbsTaskTree, type WbsFilters } from "../../src/lib/wbsView";
 import type { Milestone } from "../../src/lib/milestones";
 import type { Project } from "../../src/lib/projects";
 import type { UserProfile, WbsTask } from "../../src/lib/wbs";
@@ -14,7 +14,7 @@ const users: UserProfile[] = [
   { id: 20, name: "山田", email: "y@example.com", birthday: null, department: "開発", role: "PM", timezone: "Asia/Tokyo", interests: "", skills: "", workStyle: "", notes: "" },
   { id: 21, name: "佐藤", email: "s@example.com", birthday: null, department: "QA", role: "", timezone: "Asia/Tokyo", interests: "", skills: "", workStyle: "", notes: "" },
 ];
-const all: WbsFilters = { query: "", projectId: "all", ownerUserId: "all", status: "all" };
+const all: WbsFilters = { query: "", projectId: "all", ownerUserId: "all", status: "all", attention: "all" };
 const milestones: Milestone[] = [{ id: 1, projectId: 10, projectName: "新製品", projectCode: "NEW-1", name: "公開", description: "", dueDate: "2026-09-01", completed: false, color: "forest" }];
 
 describe("WBS view methods", () => {
@@ -26,7 +26,7 @@ describe("WBS view methods", () => {
   });
 
   it("summarizes visible work without treating completed work as overdue", () => {
-    expect(summarizeWbsTasks(tasks, "2026-08-06")).toEqual({ total: 3, open: 2, overdue: 1, delayed: 1, unassigned: 2, scheduleUnassigned: 0, averageProgress: 47 });
+    expect(summarizeWbsTasks(tasks, "2026-08-06")).toEqual({ total: 3, open: 2, overdue: 1, delayed: 1, unassigned: 1, scheduleUnassigned: 0, averageProgress: 47 });
     expect(summarizeWbsTasks([], "2026-08-06").averageProgress).toBe(0);
   });
 
@@ -55,6 +55,29 @@ describe("WBS view methods", () => {
     expect(dailyProgressActionLabel({ todayDailyProgress: 0 }, false)).toBe("今日の進捗を編集");
     expect(dailyProgressActionLabel({}, false, true)).toBe("過去の進捗を入力");
     expect(dailyProgressActionLabel({ todayDailyProgress: 10 }, true)).toBeNull();
+    expect(taskActionLabels({}, false, true)).toEqual(["タスクを編集", "過去の進捗を入力", "作業経緯を表示", "＋ サブタスクを追加"]);
+    expect(taskActionLabels({}, true, true)).toEqual(["タスクを編集", "作業経緯を表示", "＋ サブタスクを追加"]);
+  });
+
+  it("filters attention conditions with existing filters and restores ancestors", () => {
+    expect(filterWbsTasks(tasks, { ...all, projectId: 10, attention: "unassigned" }, "2026-08-06").map((task) => task.id)).toEqual([2]);
+    expect(filterWbsTasks(tasks, { ...all, query: "UI", attention: "open" }, "2026-08-06").map((task) => task.id)).toEqual([2]);
+    expect(includeMatchingAncestors(tasks, [tasks[1]]).map((task) => task.id)).toEqual([1, 2]);
+    expect(filterWbsTasks(tasks, all, "2026-08-06")).toEqual(tasks);
+  });
+
+  it("collapses descendants unless a matching descendant must be revealed", () => {
+    const grandchild = { ...tasks[1], id: 4, title: "孫", parentTaskId: 2 };
+    const nested = [tasks[0], tasks[1], grandchild];
+    expect(visibleWbsTaskTree(nested, new Set([1]), new Set()).map(({ task }) => task.id)).toEqual([1]);
+    expect(visibleWbsTaskTree(nested, new Set([1, 2]), new Set([4])).map(({ task }) => task.id)).toEqual([1, 2, 4]);
+  });
+
+  it("summarizes descendant attention and calculates drag previews", () => {
+    const child = { ...tasks[1], scheduleAssigned: false, plannedEnd: "2026-08-01" };
+    expect(summarizeDescendants([tasks[0], child], 1, "2026-08-06")).toMatchObject({ count: 1, unassigned: 1, scheduleUnassigned: 1 });
+    expect(calculateSchedulePreview(tasks[0], "move", 1, "JP")).toMatchObject({ plannedStart: "2026-08-03", businessDays: 3, plannedEnd: "2026-08-05" });
+    expect(calculateSchedulePreview(tasks[0], "right", 2, "JP")).toMatchObject({ businessDays: 5, plannedEnd: "2026-08-07" });
   });
 
   it("offers only same-level tasks as prerequisites and excludes cycles", () => {
