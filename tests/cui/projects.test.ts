@@ -41,7 +41,7 @@ describe("project data methods", () => {
   it("updates fields, members, and invalid WBS assignments", async () => {
     await updateProject(4, project);
     expect(db.execute).toHaveBeenCalledTimes(5);
-    expect(db.execute.mock.calls.at(-1)?.[0]).toContain("assignee_id=NULL");
+    expect(db.execute.mock.calls.at(-1)?.[0]).toContain("owner_user_id=NULL");
   });
 
   it("deletes a project without deleting WBS rows", async () => {

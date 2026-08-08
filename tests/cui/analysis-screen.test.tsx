@@ -5,7 +5,7 @@ import type { Project } from "../../src/lib/projects";
 import type { WbsTask } from "../../src/lib/wbs";
 
 const project: Project = { id: 1, name: "基幹刷新", code: "CORE", clientName: "", description: "", status: "active", priority: "high", plannedStart: null, plannedEnd: null, members: [] };
-const base: WbsTask = { id: 1, title: "遅延中の設計", description: "", projectId: 1, projectName: "基幹刷新", parentTaskId: null, parentTaskTitle: null, assigneeId: null, assigneeName: null, status: "in_progress", progress: 10, countryCode: "JP", plannedStart: "2026-08-03", plannedEnd: "2026-08-07", businessDays: 5, actualStart: null, actualEnd: null, finalized: true, latestDelayReason: "顧客レビュー待ち" };
+const base: WbsTask = { id: 1, title: "遅延中の設計", description: "", projectId: 1, projectName: "基幹刷新", parentTaskId: null, parentTaskTitle: null, ownerUserId: null, ownerUserName: null, status: "in_progress", progress: 10, countryCode: "JP", plannedStart: "2026-08-03", plannedEnd: "2026-08-07", businessDays: 5, actualStart: null, actualEnd: null, finalized: true, latestDelayReason: "顧客レビュー待ち" };
 
 describe("analysis screen", () => {
   it("shows chart switching, delayed propagation, reason callout, and status colors", () => {

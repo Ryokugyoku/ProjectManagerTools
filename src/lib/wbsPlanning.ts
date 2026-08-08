@@ -15,7 +15,7 @@ export function countBusinessDays(start: string, end: string, countryCode: strin
   return count;
 }
 
-type ProgressPlan = Pick<WbsTask, "plannedStart" | "plannedEnd" | "businessDays" | "countryCode"> & { assigneeLeaves?: UserLeave[] };
+type ProgressPlan = Pick<WbsTask, "plannedStart" | "plannedEnd" | "businessDays" | "countryCode"> & { ownerLeaves?: UserLeave[] };
 export type DayCheckpoint = "none" | "morning" | "day";
 
 export function availableWorkdays(start: string, end: string, countryCode: string, leaves: UserLeave[] = []): number {
@@ -33,25 +33,25 @@ export function availableWorkdays(start: string, end: string, countryCode: strin
 export function expectedProgress(task: ProgressPlan, date: string, checkpoint: DayCheckpoint = "day"): number {
   if (date < task.plannedStart) return 0;
   if (date > task.plannedEnd || (date === task.plannedEnd && checkpoint === "day")) return 100;
-  const leaveReduction = (task.assigneeLeaves ?? []).reduce((sum, leave) => {
+  const leaveReduction = (task.ownerLeaves ?? []).reduce((sum, leave) => {
     if (leave.date < task.plannedStart || leave.date > task.plannedEnd || !isBusinessDay(leave.date, task.countryCode)) return sum;
     return sum + (leave.unit === "full_day" ? 1 : .5);
   }, 0);
   const available = Math.max(0, task.businessDays - leaveReduction);
   if (available <= 0) return 0;
   const previousDate = addCalendarDays(date, -1);
-  const elapsedBeforeToday = availableWorkdays(task.plannedStart, previousDate, task.countryCode, task.assigneeLeaves);
-  const elapsed = elapsedBeforeToday + availableCapacityAtCheckpoint(date, task.countryCode, task.assigneeLeaves, checkpoint);
+  const elapsedBeforeToday = availableWorkdays(task.plannedStart, previousDate, task.countryCode, task.ownerLeaves);
+  const elapsed = elapsedBeforeToday + availableCapacityAtCheckpoint(date, task.countryCode, task.ownerLeaves, checkpoint);
   return Math.min(100, Math.round((elapsed / available) * 100));
 }
 
-export function isTaskDelayed(task: Pick<WbsTask, "finalized" | "status" | "progress" | "plannedStart" | "plannedEnd" | "businessDays" | "countryCode" | "assigneeLeaves">, date: string): boolean {
+export function isTaskDelayed(task: Pick<WbsTask, "finalized" | "status" | "progress" | "plannedStart" | "plannedEnd" | "businessDays" | "countryCode" | "ownerLeaves">, date: string): boolean {
   return task.finalized && task.status !== "completed" && task.progress < expectedProgress(task, date);
 }
 
 export type ProgressHealth = "untracked" | "ahead" | "on-track" | "behind";
 
-export function progressHealth(task: Pick<WbsTask, "finalized" | "progress" | "plannedStart" | "plannedEnd" | "businessDays" | "countryCode" | "assigneeLeaves">, date: string): ProgressHealth {
+export function progressHealth(task: Pick<WbsTask, "finalized" | "progress" | "plannedStart" | "plannedEnd" | "businessDays" | "countryCode" | "ownerLeaves">, date: string): ProgressHealth {
   if (!task.finalized) return "untracked";
   const planned = expectedProgress(task, date);
   if (task.progress > planned) return "ahead";

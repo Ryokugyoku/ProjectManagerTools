@@ -4,13 +4,13 @@ const db = vi.hoisted(() => ({ select: vi.fn(), execute: vi.fn() }));
 vi.mock("@tauri-apps/plugin-sql", () => ({ default: { load: vi.fn(async () => db) } }));
 
 import {
-  createAssignee, createUserLeave, createWbsTask, deleteAssignee, deleteUserLeave, deleteWbsTask, getSettings,
-  finalizeWbsTask, listAssignees, listDailyProgressSnapshots, listRecordedProgressDates, listTaskHistory, listTaskTreeHistory, listUserLeaves, listWbsTasks, saveDailyProgress, saveScheduleChanges, saveSettings, updateAssignee, updateUserLeave,
+  createUser, createUserLeave, createWbsTask, deleteUser, deleteUserLeave, deleteWbsTask, getSettings,
+  finalizeWbsTask, listUsers, listDailyProgressSnapshots, listRecordedProgressDates, listTaskActivity, listTaskTreeActivity, listUserLeaves, listWbsTasks, saveDailyProgress, saveScheduleChanges, saveSettings, updateUser, updateUserLeave,
   updateWbsTask, type AppSettings, type UserProfileInput, type WbsTaskInput,
 } from "../../src/lib/wbs";
 
 const task: WbsTaskInput = {
-  title: " 設計 ", description: " 詳細 ", projectId: null, parentTaskId: null, assigneeId: null,
+  title: " 設計 ", description: " 詳細 ", projectId: null, parentTaskId: null, ownerUserId: null,
   status: "not_started", progress: 0, countryCode: "JP", plannedStart: "2026-08-06",
   plannedEnd: "2026-08-13", businessDays: 5, actualStart: null, actualEnd: null,
 };
@@ -23,36 +23,36 @@ const user: UserProfileInput = {
 beforeEach(() => { db.select.mockReset(); db.execute.mockReset(); db.execute.mockResolvedValue({ rowsAffected: 1, lastInsertId: 99 }); });
 
 describe("WBS data methods", () => {
-  it("maps WBS rows including project and assignee", async () => {
-    db.select.mockResolvedValueOnce([{ id: 1, title: "設計", description: "", project_id: 2, project_name: "案件", parent_task_id: 5, parent_task_title: "要件定義", prerequisite_task_id: 6, prerequisite_task_title: "基盤", assignee_id: 3, assignee_name: "山田", status: "in_progress", progress: 40, country_code: "JP", planned_start: "2026-08-06", planned_end: "2026-08-13", business_days: 5, actual_start: "2026-08-06", actual_end: null, finalized: 1, today_daily_progress: 10, today_progress_note: "確認済み", latest_delay_reason: "レビュー待ち" }])
+  it("maps WBS rows including project and user", async () => {
+    db.select.mockResolvedValueOnce([{ id: 1, title: "設計", description: "", project_id: 2, project_name: "案件", parent_task_id: 5, parent_task_title: "要件定義", owner_user_id: 3, owner_user_name: "山田", status: "in_progress", progress: 40, country_code: "JP", planned_start: "2026-08-06", planned_end: "2026-08-13", business_days: 5, actual_start: "2026-08-06", actual_end: null, finalized: 1, today_daily_progress: 10, today_progress_note: "確認済み", latest_delay_reason: "レビュー待ち" }])
       .mockResolvedValueOnce([{ task_id: 1, prerequisite_task_id: 6, prerequisite_task_title: "基盤" }, { task_id: 1, prerequisite_task_id: 7, prerequisite_task_title: "デザイン" }])
       .mockResolvedValueOnce([]);
-    expect(await listWbsTasks("2026-08-07")).toEqual([{ id: 1, title: "設計", description: "", projectId: 2, projectName: "案件", parentTaskId: 5, parentTaskTitle: "要件定義", prerequisiteTaskId: 6, prerequisiteTaskTitle: "基盤", prerequisiteTaskIds: [6, 7], prerequisiteTasks: [{ id: 6, title: "基盤" }, { id: 7, title: "デザイン" }], assigneeId: 3, assigneeName: "山田", status: "in_progress", progress: 40, countryCode: "JP", plannedStart: "2026-08-06", plannedEnd: "2026-08-13", businessDays: 5, actualStart: "2026-08-06", actualEnd: null, finalized: true, todayDailyProgress: 10, todayProgressNote: "確認済み", latestDelayReason: "レビュー待ち" }]);
-    expect(db.select).toHaveBeenCalledWith(expect.stringContaining("today_log.log_date=$1"), ["2026-08-07"]);
+    expect(await listWbsTasks("2026-08-07")).toEqual([{ id: 1, title: "設計", description: "", projectId: 2, projectName: "案件", parentTaskId: 5, parentTaskTitle: "要件定義", prerequisiteTaskIds: [6, 7], prerequisiteTasks: [{ id: 6, title: "基盤" }, { id: 7, title: "デザイン" }], ownerUserId: 3, ownerUserName: "山田", status: "in_progress", progress: 40, countryCode: "JP", plannedStart: "2026-08-06", plannedEnd: "2026-08-13", businessDays: 5, actualStart: "2026-08-06", actualEnd: null, finalized: true, todayDailyProgress: 10, todayProgressNote: "確認済み", latestDelayReason: "レビュー待ち" }]);
+    expect(db.select).toHaveBeenCalledWith(expect.stringContaining("today_log.entry_date=$1"), ["2026-08-07"]);
   });
 
-  it("maps legacy prerequisites, nullable fields, and assignee leave states", async () => {
+  it("maps nullable fields, dependency rows, and user leave states", async () => {
     const baseRow = {
       id: 1, title: "設計", description: "", project_id: 2, project_name: "案件",
-      parent_task_id: null, parent_task_title: null, prerequisite_task_id: null, prerequisite_task_title: null,
-      assignee_id: null, assignee_name: null, status: "not_started", progress: 0, country_code: "JP",
+      parent_task_id: null, parent_task_title: null,
+      owner_user_id: null, owner_user_name: null, status: "not_started", progress: 0, country_code: "JP",
       planned_start: "2026-08-06", planned_end: "2026-08-13", business_days: 5,
       actual_start: null, actual_end: null, finalized: 0, today_daily_progress: null,
       today_progress_note: null, latest_delay_reason: null,
     };
     db.select.mockResolvedValueOnce([
       baseRow,
-      { ...baseRow, id: 2, prerequisite_task_id: 8, assignee_id: 3, assignee_name: "山田" },
-    ]).mockResolvedValueOnce([]).mockResolvedValueOnce([
+      { ...baseRow, id: 2, owner_user_id: 3, owner_user_name: "山田" },
+    ]).mockResolvedValueOnce([{ task_id: 2, prerequisite_task_id: 8, prerequisite_task_title: "基盤" }]).mockResolvedValueOnce([
       { id: 4, user_id: 3, user_name: "山田", leave_date: "2026-08-12", leave_type: "planned", leave_unit: "full_day", reason: "", customer_approved: 0, manager_approved: 0, workflow_approved: 0, created_at: "2026-08-01T00:00:00Z" },
       { id: 5, user_id: 3, user_name: "山田", leave_date: "2026-08-13", leave_type: "planned", leave_unit: "morning", reason: "", customer_approved: 1, manager_approved: 1, workflow_approved: 1, created_at: "2026-08-01T00:00:00Z" },
     ]);
 
     const result = await listWbsTasks("2026-08-07");
-    expect(result[0]).toMatchObject({ prerequisiteTasks: [], assigneeId: null, todayProgressNote: "", latestDelayReason: "" });
+    expect(result[0]).toMatchObject({ prerequisiteTasks: [], ownerUserId: null, todayProgressNote: "", latestDelayReason: "" });
     expect(result[1]).toMatchObject({
-      prerequisiteTasks: [{ id: 8, title: "" }],
-      assigneeLeaves: [expect.objectContaining({ id: 4 }), expect.objectContaining({ id: 5 })],
+      prerequisiteTasks: [{ id: 8, title: "基盤" }],
+      ownerLeaves: [expect.objectContaining({ id: 4 }), expect.objectContaining({ id: 5 })],
     });
   });
 
@@ -70,10 +70,10 @@ describe("WBS data methods", () => {
   it("loads the exact day's work and the latest cumulative progress up to that date", async () => {
     db.select.mockResolvedValue([{ task_id: 7, daily_progress: 15, cumulative_progress: 55, note: "レビュー完了", latest_history_type: "progress", latest_history_details: "今日 +15% / 累計 55%", reschedule_reason: "顧客都合", delay_reason: "回答待ち" }]);
     expect(await listDailyProgressSnapshots("2026-08-07")).toEqual([{ taskId: 7, date: "2026-08-07", dailyProgress: 15, cumulativeProgress: 55, note: "レビュー完了", latestHistoryType: "progress", latestHistoryDetails: "今日 +15% / 累計 55%", rescheduleReason: "顧客都合", delayReason: "回答待ち" }]);
-    expect(db.select).toHaveBeenCalledWith(expect.stringContaining("previous.log_date<=$1"), ["2026-08-07"]);
-    expect(db.select).toHaveBeenCalledWith(expect.stringContaining("exact_log.log_date=$1"), ["2026-08-07"]);
+    expect(db.select).toHaveBeenCalledWith(expect.stringContaining("previous.entry_date<=$1"), ["2026-08-07"]);
+    expect(db.select).toHaveBeenCalledWith(expect.stringContaining("exact_log.entry_date=$1"), ["2026-08-07"]);
     expect(db.select).toHaveBeenCalledWith(expect.stringContaining("date(history.occurred_at, 'localtime')=$1"), ["2026-08-07"]);
-    expect(db.select).toHaveBeenCalledWith(expect.stringContaining("history.event_type='rescheduled'"), ["2026-08-07"]);
+    expect(db.select).toHaveBeenCalledWith(expect.stringContaining("history.event_kind='rescheduled'"), ["2026-08-07"]);
   });
 
   it("maps absent daily snapshot text to empty strings", async () => {
@@ -85,9 +85,9 @@ describe("WBS data methods", () => {
   });
 
   it("lists recorded progress dates for a task", async () => {
-    db.select.mockResolvedValue([{ log_date: "2026-08-05" }, { log_date: "2026-08-07" }]);
+    db.select.mockResolvedValue([{ entry_date: "2026-08-05" }, { entry_date: "2026-08-07" }]);
     expect(await listRecordedProgressDates(7)).toEqual(["2026-08-05", "2026-08-07"]);
-    expect(db.select).toHaveBeenCalledWith(expect.stringContaining("ORDER BY log_date"), [7]);
+    expect(db.select).toHaveBeenCalledWith(expect.stringContaining("ORDER BY entry_date"), [7]);
   });
 
   it("creates an unassigned WBS and trims text", async () => {
@@ -95,11 +95,11 @@ describe("WBS data methods", () => {
     expect(db.execute).toHaveBeenCalledWith(expect.stringContaining("INSERT INTO wbs_tasks"), expect.arrayContaining(["設計", "詳細"]));
   });
 
-  it("creates and updates a WBS only when the assignee belongs to the project", async () => {
+  it("creates and updates a WBS only when the user belongs to the project", async () => {
     db.select.mockResolvedValueOnce([{ count: 1 }]);
-    await createWbsTask({ ...task, projectId: 4, assigneeId: 8 });
+    await createWbsTask({ ...task, projectId: 4, ownerUserId: 8 });
     db.select.mockResolvedValueOnce([{ count: 1 }]).mockResolvedValueOnce([{ invalid_children: 0 }]).mockResolvedValueOnce([{ invalid_dependents: 0 }]).mockResolvedValueOnce([{ finalized: 0 }]);
-    await updateWbsTask(9, { ...task, projectId: 4, assigneeId: 8 });
+    await updateWbsTask(9, { ...task, projectId: 4, ownerUserId: 8 });
     expect(db.select).toHaveBeenCalledTimes(5);
     expect(db.execute).toHaveBeenCalledTimes(4);
   });
@@ -128,19 +128,19 @@ describe("WBS data methods", () => {
 
   it("accepts only same-level prerequisite tasks and rejects dependency cycles", async () => {
     db.select.mockResolvedValueOnce([{ candidate_project_id: 4, candidate_parent_task_id: null, is_cycle: 0 }]);
-    await createWbsTask({ ...task, projectId: 4, prerequisiteTaskId: 7 });
-    expect(db.execute).toHaveBeenCalledWith(expect.stringContaining("prerequisite_task_id"), expect.arrayContaining([4, null, 7]));
+    await createWbsTask({ ...task, projectId: 4, prerequisiteTaskIds: [7] });
+    expect(db.execute).toHaveBeenCalledWith("INSERT INTO wbs_task_dependencies (task_id, prerequisite_task_id) VALUES ($1, $2)", [99, 7]);
 
-    await expect(updateWbsTask(7, { ...task, projectId: 4, prerequisiteTaskId: 7 })).rejects.toThrow("自身");
+    await expect(updateWbsTask(7, { ...task, projectId: 4, prerequisiteTaskIds: [7] })).rejects.toThrow("自身");
     db.select.mockResolvedValueOnce([{ candidate_project_id: 4, candidate_parent_task_id: 3, is_cycle: 0 }]);
-    await expect(updateWbsTask(7, { ...task, projectId: 4, parentTaskId: null, prerequisiteTaskId: 9 })).rejects.toThrow("同じ階層");
+    await expect(updateWbsTask(7, { ...task, projectId: 4, parentTaskId: null, prerequisiteTaskIds: [9] })).rejects.toThrow("同じ階層");
     db.select.mockResolvedValueOnce([{ candidate_project_id: 4, candidate_parent_task_id: null, is_cycle: 1 }]);
-    await expect(updateWbsTask(7, { ...task, projectId: 4, prerequisiteTaskId: 9 })).rejects.toThrow("循環");
+    await expect(updateWbsTask(7, { ...task, projectId: 4, prerequisiteTaskIds: [9] })).rejects.toThrow("循環");
   });
 
   it("rejects a missing prerequisite record", async () => {
     db.select.mockResolvedValueOnce([]);
-    await expect(createWbsTask({ ...task, projectId: 4, prerequisiteTaskId: 7 })).rejects.toThrow("完了前提タスクが見つかりません");
+    await expect(createWbsTask({ ...task, projectId: 4, prerequisiteTaskIds: [7] })).rejects.toThrow("完了前提タスクが見つかりません");
   });
 
   it("stores multiple prerequisite tasks for one WBS", async () => {
@@ -175,17 +175,17 @@ describe("WBS data methods", () => {
     expect(db.execute).toHaveBeenCalledWith(expect.stringContaining("UPDATE wbs_tasks"), expect.any(Array));
   });
 
-  it("rejects invalid WBS input and an out-of-project assignee", async () => {
+  it("rejects invalid WBS input and an out-of-project user", async () => {
     await expect(createWbsTask({ ...task, title: "" })).rejects.toThrow("タスク名");
     await expect(createWbsTask({ ...task, plannedStart: "" })).rejects.toThrow("予定日");
     await expect(createWbsTask({ ...task, businessDays: 0 })).rejects.toThrow("1日以上");
     db.select.mockResolvedValue([{ count: 0 }]);
-    await expect(updateWbsTask(1, { ...task, projectId: 4, assigneeId: 9 })).rejects.toThrow("案件のメンバー");
+    await expect(updateWbsTask(1, { ...task, projectId: 4, ownerUserId: 9 })).rejects.toThrow("案件のメンバー");
   });
 
   it("rejects missing assignment and hierarchy aggregate rows", async () => {
     db.select.mockResolvedValueOnce([]);
-    await expect(createWbsTask({ ...task, projectId: 4, assigneeId: 9 })).rejects.toThrow("案件のメンバー");
+    await expect(createWbsTask({ ...task, projectId: 4, ownerUserId: 9 })).rejects.toThrow("案件のメンバー");
 
     db.select.mockResolvedValueOnce([]).mockResolvedValueOnce([{ invalid_dependents: 0 }]).mockResolvedValueOnce([{ finalized: 0 }]);
     await expect(updateWbsTask(7, { ...task, projectId: 4 })).resolves.toBeUndefined();
@@ -196,13 +196,13 @@ describe("WBS data methods", () => {
 
   it("detaches child tasks between deleting progress logs and the task", async () => {
     await deleteWbsTask(7);
-    expect(db.execute.mock.calls.map((call) => call[0])).toEqual([expect.stringContaining("wbs_work_history"), expect.stringContaining("wbs_progress_logs"), expect.stringContaining("wbs_task_dependencies"), expect.stringContaining("prerequisite_task_id=NULL"), expect.stringContaining("parent_task_id=NULL"), expect.stringContaining("DELETE FROM wbs_tasks")]);
+    expect(db.execute.mock.calls.map((call) => call[0])).toEqual([expect.stringContaining("task_activity_events"), expect.stringContaining("task_progress_entries"), expect.stringContaining("wbs_task_dependencies"), expect.stringContaining("parent_task_id=NULL"), expect.stringContaining("DELETE FROM wbs_tasks")]);
   });
 
   it("upserts daily progress and updates the WBS", async () => {
     db.select.mockResolvedValueOnce([{ progress: 40, previous_daily: 0, finalized: 1, planned_start: "2026-08-03", planned_end: "2026-08-14", business_days: 10, country_code: "JP", child_count: 0 }]).mockResolvedValueOnce([]);
     await saveDailyProgress(7, "2026-08-07", 20, " 進捗 ", "");
-    expect(db.execute).toHaveBeenNthCalledWith(1, expect.stringContaining("wbs_progress_logs"), [7, "2026-08-07", 60, "進捗", 20]);
+    expect(db.execute).toHaveBeenNthCalledWith(1, expect.stringContaining("task_progress_entries"), [7, "2026-08-07", 60, "進捗", 20]);
     expect(db.execute).toHaveBeenCalledTimes(3);
   });
 
@@ -212,8 +212,8 @@ describe("WBS data methods", () => {
     await expect(saveDailyProgress(7, "2026-08-07", 10, "", "")).rejects.toThrow("タスクが見つかりません");
   });
 
-  it("loads assignee leave and records progress without a note", async () => {
-    db.select.mockResolvedValueOnce([{ progress: 0, previous_daily: 0, finalized: 0, planned_start: "2026-08-03", planned_end: "2026-08-14", business_days: 10, country_code: "JP", assignee_id: 3, child_count: 0 }])
+  it("loads user leave and records progress without a note", async () => {
+    db.select.mockResolvedValueOnce([{ progress: 0, previous_daily: 0, finalized: 0, planned_start: "2026-08-03", planned_end: "2026-08-14", business_days: 10, country_code: "JP", owner_user_id: 3, child_count: 0 }])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([{ id: 4, user_id: 3, user_name: "山田", leave_date: "2026-08-12", leave_type: "planned", leave_unit: "full_day", reason: "", customer_approved: 0, manager_approved: 0, workflow_approved: 0, created_at: "2026-08-01T00:00:00Z" }]);
     await saveDailyProgress(7, "2026-08-07", 10, "", "");
@@ -238,16 +238,16 @@ describe("WBS data methods", () => {
   });
 
   it("replaces today's increment instead of adding it twice", async () => {
-    db.select.mockResolvedValueOnce([{ progress: 60, previous_daily: 20, finalized: 0, planned_start: "2026-08-03", planned_end: "2026-08-14", business_days: 10, country_code: "JP", child_count: 0 }]).mockResolvedValueOnce([{ log_date: "2026-08-07", progress: 60, daily_progress: 20 }]);
+    db.select.mockResolvedValueOnce([{ progress: 60, previous_daily: 20, finalized: 0, planned_start: "2026-08-03", planned_end: "2026-08-14", business_days: 10, country_code: "JP", child_count: 0 }]).mockResolvedValueOnce([{ entry_date: "2026-08-07", cumulative_progress: 60, daily_progress: 20 }]);
     await saveDailyProgress(7, "2026-08-07", 10, "訂正", "");
-    expect(db.execute).toHaveBeenNthCalledWith(1, expect.stringContaining("wbs_progress_logs"), [7, "2026-08-07", 50, "訂正", 10]);
+    expect(db.execute).toHaveBeenNthCalledWith(1, expect.stringContaining("task_progress_entries"), [7, "2026-08-07", 50, "訂正", 10]);
   });
 
   it("recalculates later cumulative progress when a missed past date is added", async () => {
-    db.select.mockResolvedValueOnce([{ progress: 50, previous_daily: 0, finalized: 0, planned_start: "2026-08-03", planned_end: "2026-08-14", business_days: 10, country_code: "JP", child_count: 0 }]).mockResolvedValueOnce([{ log_date: "2026-08-08", progress: 50, daily_progress: 20 }]);
+    db.select.mockResolvedValueOnce([{ progress: 50, previous_daily: 0, finalized: 0, planned_start: "2026-08-03", planned_end: "2026-08-14", business_days: 10, country_code: "JP", child_count: 0 }]).mockResolvedValueOnce([{ entry_date: "2026-08-08", cumulative_progress: 50, daily_progress: 20 }]);
     await saveDailyProgress(7, "2026-08-07", 10, "追加入力", "");
-    expect(db.execute).toHaveBeenNthCalledWith(1, expect.stringContaining("wbs_progress_logs"), [7, "2026-08-07", 40, "追加入力", 10]);
-    expect(db.execute).toHaveBeenNthCalledWith(2, "UPDATE wbs_progress_logs SET progress=$1 WHERE task_id=$2 AND log_date=$3", [60, 7, "2026-08-08"]);
+    expect(db.execute).toHaveBeenNthCalledWith(1, expect.stringContaining("task_progress_entries"), [7, "2026-08-07", 40, "追加入力", 10]);
+    expect(db.execute).toHaveBeenNthCalledWith(2, expect.stringContaining("UPDATE task_progress_entries SET cumulative_progress=$1"), [60, 7, "2026-08-08"]);
     expect(db.execute).toHaveBeenNthCalledWith(3, expect.stringContaining("UPDATE wbs_tasks"), [60, "2026-08-07", 7]);
   });
 
@@ -271,14 +271,14 @@ describe("WBS data methods", () => {
   });
 
   it("loads work history in chronological order", async () => {
-    db.select.mockResolvedValue([{ id: 2, task_id: 7, event_type: "delay", reason: "待ち", details: "20%", occurred_at: "2026-08-06T01:00:00Z" }]);
-    expect(await listTaskHistory(7)).toEqual([{ id: 2, taskId: 7, type: "delay", reason: "待ち", details: "20%", occurredAt: "2026-08-06T01:00:00Z" }]);
+    db.select.mockResolvedValue([{ id: 2, task_id: 7, event_kind: "delay", reason: "待ち", details: "20%", occurred_at: "2026-08-06T01:00:00Z" }]);
+    expect(await listTaskActivity(7)).toEqual([{ id: 2, taskId: 7, type: "delay", reason: "待ち", details: "20%", occurredAt: "2026-08-06T01:00:00Z" }]);
     expect(db.select).toHaveBeenCalledWith(expect.stringContaining("ORDER BY occurred_at ASC"), [7]);
   });
 
   it("loads the selected task and descendant history with source context", async () => {
-    db.select.mockResolvedValue([{ id: 3, task_id: 8, event_type: "progress", reason: "", details: "累計 50%", occurred_at: "2026-08-07T01:00:00Z", task_title: "実装", depth: 1 }]);
-    expect(await listTaskTreeHistory(7)).toEqual([{ id: 3, taskId: 8, type: "progress", reason: "", details: "累計 50%", occurredAt: "2026-08-07T01:00:00Z", taskTitle: "実装", depth: 1 }]);
+    db.select.mockResolvedValue([{ id: 3, task_id: 8, event_kind: "progress", reason: "", details: "累計 50%", occurred_at: "2026-08-07T01:00:00Z", task_title: "実装", depth: 1 }]);
+    expect(await listTaskTreeActivity(7)).toEqual([{ id: 3, taskId: 8, type: "progress", reason: "", details: "累計 50%", occurredAt: "2026-08-07T01:00:00Z", taskTitle: "実装", depth: 1 }]);
     expect(db.select).toHaveBeenCalledWith(expect.stringContaining("WITH RECURSIVE task_tree"), [7]);
   });
 });
@@ -286,28 +286,28 @@ describe("WBS data methods", () => {
 describe("user and settings data methods", () => {
   it("maps user profile rows", async () => {
     db.select.mockResolvedValue([{ id: 1, name: "山田", email: "taro@example.com", birthday: null, department: "開発", role: "PM", timezone: "Asia/Tokyo", interests: "読書", skills: "計画", work_style: "朝型", notes: "" }]);
-    expect((await listAssignees())[0]).toMatchObject({ name: "山田", workStyle: "朝型" });
+    expect((await listUsers())[0]).toMatchObject({ name: "山田", workStyle: "朝型" });
   });
 
   it("creates and updates a valid user", async () => {
-    await createAssignee(user);
-    await updateAssignee(1, user);
+    await createUser(user);
+    await updateUser(1, user);
     expect(db.execute).toHaveBeenCalledTimes(2);
     expect(db.execute.mock.calls[0][1][0]).toBe("山田 太郎");
   });
 
   it("stores a blank birthday as null", async () => {
-    await createAssignee({ ...user, birthday: "" });
+    await createUser({ ...user, birthday: "" });
     expect(db.execute.mock.calls[0][1][2]).toBeNull();
   });
 
   it("rejects missing name and invalid email", async () => {
-    await expect(createAssignee({ ...user, name: "" })).rejects.toThrow("氏名");
-    await expect(updateAssignee(1, { ...user, email: "invalid" })).rejects.toThrow("メールアドレス");
+    await expect(createUser({ ...user, name: "" })).rejects.toThrow("氏名");
+    await expect(updateUser(1, { ...user, email: "invalid" })).rejects.toThrow("メールアドレス");
   });
 
   it("detaches and deletes a user", async () => {
-    await deleteAssignee(3);
+    await deleteUser(3);
     expect(db.execute).toHaveBeenCalledTimes(3);
   });
 

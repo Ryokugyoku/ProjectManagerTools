@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildBurndownSeries, buildDependencyAnalysis, buildDependencyScope, currentRemainingEffort, dependencyIds, summarizeProgressHealth } from "../../src/lib/wbsAnalysis";
 import type { WbsTask } from "../../src/lib/wbs";
 
-const base: WbsTask = { id: 1, title: "要件", description: "", projectId: 1, projectName: "案件", parentTaskId: null, parentTaskTitle: null, assigneeId: 1, assigneeName: "山田", status: "in_progress", progress: 50, countryCode: "JP", plannedStart: "2026-08-03", plannedEnd: "2026-08-07", businessDays: 5, actualStart: null, actualEnd: null, finalized: true };
+const base: WbsTask = { id: 1, title: "要件", description: "", projectId: 1, projectName: "案件", parentTaskId: null, parentTaskTitle: null, ownerUserId: 1, ownerUserName: "山田", status: "in_progress", progress: 50, countryCode: "JP", plannedStart: "2026-08-03", plannedEnd: "2026-08-07", businessDays: 5, actualStart: null, actualEnd: null, finalized: true };
 
 describe("WBS analysis methods", () => {
   it("finds the longest dependency path across multiple prerequisites", () => {
@@ -52,6 +52,6 @@ describe("WBS analysis methods", () => {
   it("summarizes ahead, on-track, behind, and draft separately", () => {
     const result = summarizeProgressHealth([{ ...base, progress: 60 }, { ...base, id: 2, progress: 100 }, { ...base, id: 3, progress: 20 }, { ...base, id: 4, finalized: false }], "2026-08-05");
     expect(result).toEqual({ ahead: 1, onTrack: 1, behind: 1, draft: 1 });
-    expect(dependencyIds({ ...base, prerequisiteTaskId: 7 })).toEqual([7]);
+    expect(dependencyIds({ ...base, prerequisiteTaskIds: [7] })).toEqual([7]);
   });
 });

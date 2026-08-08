@@ -29,7 +29,7 @@ export type DependencyScope = {
 export type BurndownPoint = { date: string; plannedRemaining: number };
 
 export function dependencyIds(task: WbsTask): number[] {
-  return task.prerequisiteTaskIds ?? (task.prerequisiteTaskId == null ? [] : [task.prerequisiteTaskId]);
+  return task.prerequisiteTaskIds ?? [];
 }
 
 export function buildDependencyScope(tasks: WbsTask[], parentTaskId: number | null): DependencyScope {

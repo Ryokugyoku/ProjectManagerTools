@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { TimelineBoard } from "../../src/features/wbs/TimelineBoard";
 import { HomeScreen } from "../../src/features/home/HomeScreen";
-import { UsersScreen } from "../../src/features/users/UsersScreen";
+import { AttendanceScreen } from "../../src/features/attendance/AttendanceScreen";
 import type { WbsTask } from "../../src/lib/wbs";
 
 const task: WbsTask = {
@@ -14,8 +14,8 @@ const task: WbsTask = {
   projectName: null,
   parentTaskId: null,
   parentTaskTitle: null,
-  assigneeId: null,
-  assigneeName: null,
+  ownerUserId: null,
+  ownerUserName: null,
   status: "in_progress",
   progress: 40,
   countryCode: "JP",
@@ -31,7 +31,7 @@ function render(selectedId: number | null) {
   return renderToStaticMarkup(<TimelineBoard
     tasks={[task]}
     milestones={[]}
-    assignees={[]}
+    users={[]}
     projects={[]}
     groupBy="project"
     countryCode="JP"
@@ -77,7 +77,7 @@ describe("WBSロードマップの選択表示", () => {
   it("子を持つタスクを専用色の親タスク行として示す", () => {
     const child = { ...task, id: 2, title: "子", parentTaskId: 1, parentTaskTitle: task.title };
     const markup = renderToStaticMarkup(<TimelineBoard {...{
-      tasks: [task], allTasks: [task, child], milestones: [], assignees: [], projects: [], groupBy: "project" as const,
+      tasks: [task], allTasks: [task, child], milestones: [], users: [], projects: [], groupBy: "project" as const,
       countryCode: "JP", selectedId: null, onSelect: vi.fn(), onCreateSubtask: vi.fn(), onShowHistory: vi.fn(),
       onRecordProgress: vi.fn(), onSelectMilestone: vi.fn(), onScheduleChange: vi.fn(),
     }} />);
@@ -86,12 +86,12 @@ describe("WBSロードマップの選択表示", () => {
   });
 
   it("担当者の午前半休と午後半休を日付セルの左右で示す", () => {
-    const withLeaves = { ...task, assigneeId: 2, assigneeName: "山田", assigneeLeaves: [
+    const withLeaves = { ...task, ownerUserId: 2, ownerUserName: "山田", ownerLeaves: [
       { id: 1, userId: 2, userName: "山田", date: "2026-08-07", type: "planned" as const, unit: "morning" as const, reason: "", customerApproved: true, managerApproved: true, workflowApproved: true, createdAt: "2026-08-01T00:00:00Z" },
       { id: 2, userId: 2, userName: "山田", date: "2026-08-08", type: "unplanned" as const, unit: "afternoon" as const, reason: "体調不良", customerApproved: false, managerApproved: false, workflowApproved: false, createdAt: "2026-08-01T00:00:00Z" },
     ] };
     const markup = renderToStaticMarkup(<TimelineBoard {...{
-      tasks: [withLeaves], milestones: [], assignees: [], projects: [], groupBy: "project" as const,
+      tasks: [withLeaves], milestones: [], users: [], projects: [], groupBy: "project" as const,
       countryCode: "JP", selectedId: null, onSelect: vi.fn(), onCreateSubtask: vi.fn(), onShowHistory: vi.fn(),
       onRecordProgress: vi.fn(), onSelectMilestone: vi.fn(), onScheduleChange: vi.fn(),
     }} />);
@@ -127,13 +127,22 @@ describe("ホームの遅延表示", () => {
   });
 });
 
-describe("ユーザー画面の休暇承認", () => {
+describe("勤怠画面の休暇承認", () => {
   it("3種類の承認を任意チェックとして表示する", () => {
-    const markup = renderToStaticMarkup(<UsersScreen users={[]} leaves={[]} countryCode="JP" today="2026-08-08" onChanged={vi.fn()} onError={vi.fn()} />);
-    expect(markup).toContain("承認状況（未承認でも登録できます）");
+    const users = [{ id: 1, name: "山田", email: "yamada@example.com", birthday: null, department: "開発", role: "担当", timezone: "Asia/Tokyo", interests: "", skills: "", workStyle: "", notes: "" }];
+    const markup = renderToStaticMarkup(<AttendanceScreen users={users} leaves={[]} countryCode="JP" today="2026-08-08" onChanged={vi.fn()} onError={vi.fn()} onOpenUsers={vi.fn()} />);
+    expect(markup).toContain("勤怠・休暇");
+    expect(markup).toContain("承認状況");
     expect(markup).toContain("顧客承認");
     expect(markup).toContain("上長承認");
-    expect(markup).toContain("業務フロー承認（社内手続き）");
+    expect(markup).toContain("業務フロー承認");
     expect(markup.match(/type="checkbox"/g)).toHaveLength(3);
+  });
+
+  it("ユーザーがいない場合は登録導線を表示して休暇登録を無効にする", () => {
+    const markup = renderToStaticMarkup(<AttendanceScreen users={[]} leaves={[]} countryCode="JP" today="2026-08-08" onChanged={vi.fn()} onError={vi.fn()} onOpenUsers={vi.fn()} />);
+    expect(markup).toContain("先にユーザーを登録してください");
+    expect(markup).toContain("ユーザー画面を開く");
+    expect(markup).toContain("disabled");
   });
 });

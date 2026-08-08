@@ -2,15 +2,16 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { isPermissionGranted, sendNotification } from "@tauri-apps/plugin-notification";
 import { calculateEndDate, countries, formatISODate } from "./lib/calendar";
 import {
-  createWbsTask, deleteWbsTask, getSettings, listAssignees, listDailyProgressSnapshots, listRecordedProgressDates, listUserLeaves, listWbsTasks,
-  finalizeWbsTask, listTaskTreeHistory, saveDailyProgress, saveScheduleChanges, saveSettings, updateWbsTask,
-  type AppSettings, type Assignee, type DailyProgressSnapshot, type TaskTreeHistoryEntry, type UserLeave, type WbsStatus, type WbsTask, type WorkHistoryEntry,
+  createWbsTask, deleteWbsTask, getSettings, listUsers, listDailyProgressSnapshots, listRecordedProgressDates, listUserLeaves, listWbsTasks,
+  finalizeWbsTask, listTaskTreeActivity, saveDailyProgress, saveScheduleChanges, saveSettings, updateWbsTask,
+  type AppSettings, type UserProfile, type DailyProgressSnapshot, type TaskTreeHistoryEntry, type UserLeave, type WbsStatus, type WbsTask, type ActivityEvent,
 } from "./lib/wbs";
 import { buildScheduleCascade, buildScheduleCascadeForNewChild, expectedProgress, scheduleChangesRequireReason, type ScheduleChange, type TaskSchedule } from "./lib/wbsPlanning";
 import { TimelineBoard } from "./features/wbs/TimelineBoard";
 import { businessDaysOrDefault, missingProgressDates, parseBusinessDaysInput, requireDailyProgress, type WbsTaskForm } from "./features/wbs/taskForm";
 import { WbsProjectSelector } from "./features/wbs/WbsProjectSelector";
 import { UsersScreen } from "./features/users/UsersScreen";
+import { AttendanceScreen } from "./features/attendance/AttendanceScreen";
 import { SettingsScreen } from "./features/settings/SettingsScreen";
 import { ProjectsScreen } from "./features/projects/ProjectsScreen";
 import { HomeScreen } from "./features/home/HomeScreen";
@@ -24,7 +25,7 @@ import { dailyProgressActionLabel, filterWbsTasks, parentTaskCandidates, prerequ
 import { pendingApprovalLabel, summarizeLeaveApprovals } from "./lib/leaveApprovals";
 import "./App.css";
 
-type View = "home" | "wbs" | "analysis" | "reports" | "projects" | "users" | "settings";
+type View = "home" | "wbs" | "analysis" | "reports" | "projects" | "users" | "attendance" | "settings";
 type WbsRoadmapMode = "select" | "all" | "project";
 
 const statusLabels: Record<WbsStatus, string> = {
@@ -40,7 +41,7 @@ function App() {
   const [currentDate, setCurrentDate] = useState(() => formatISODate(new Date()));
   const [view, setView] = useState<View>("home");
   const [tasks, setTasks] = useState<WbsTask[]>([]);
-  const [assignees, setAssignees] = useState<Assignee[]>([]);
+  const [users, setUserProfiles] = useState<UserProfile[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [milestones, setMilestones] = useState<Milestone[]>([]);
   const [userLeaves, setUserLeaves] = useState<UserLeave[]>([]);
@@ -58,17 +59,17 @@ function App() {
   const [reschedule, setReschedule] = useState<{ task: WbsTask; changes: ScheduleChange[] } | null>(null);
   const [milestoneEditor, setMilestoneEditor] = useState<Milestone | "new" | null>(null);
   const [groupBy, setGroupBy] = useState<WbsGroupBy>("project");
-  const [filters, setFilters] = useState<WbsFilters>({ query: "", projectId: "all", assigneeId: "all", status: "all" });
+  const [filters, setFilters] = useState<WbsFilters>({ query: "", projectId: "all", ownerUserId: "all", status: "all" });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      const [nextTasks, nextAssignees, nextProjects, nextMilestones, nextSettings, nextLeaves] = await Promise.all([
-        listWbsTasks(currentDate), listAssignees(), listProjects(), listMilestones(), getSettings(), listUserLeaves(),
+      const [nextTasks, nextUserProfiles, nextProjects, nextMilestones, nextSettings, nextLeaves] = await Promise.all([
+        listWbsTasks(currentDate), listUsers(), listProjects(), listMilestones(), getSettings(), listUserLeaves(),
       ]);
       setTasks(nextTasks);
-      setAssignees(nextAssignees);
+      setUserProfiles(nextUserProfiles);
       setProjects(nextProjects);
       setMilestones(nextMilestones);
       setUserLeaves(nextLeaves);
@@ -135,16 +136,16 @@ function App() {
   const visibleTasks = useMemo(() => filterWbsTasks(tasks, filters), [filters, tasks]);
   const visibleSummary = useMemo(() => summarizeWbsTasks(visibleTasks, formatISODate(new Date())), [visibleTasks]);
   const roadmapLeaveAttention = useMemo(() => {
-    const assigneeIds = new Set(roadmapTasks.flatMap((task) => task.assigneeId === null ? [] : [task.assigneeId]));
+    const ownerUserIds = new Set(roadmapTasks.flatMap((task) => task.ownerUserId === null ? [] : [task.ownerUserId]));
     return userLeaves.map((leave) => ({ leave, approval: summarizeLeaveApprovals(leave, currentDate, settings.countryCode) }))
-      .filter(({ leave, approval }) => assigneeIds.has(leave.userId) && approval.state !== "complete");
+      .filter(({ leave, approval }) => ownerUserIds.has(leave.userId) && approval.state !== "complete");
   }, [currentDate, roadmapTasks, settings.countryCode, userLeaves]);
-  const filterAssignees = useMemo(() => {
-    if (typeof filters.projectId !== "number") return assignees;
+  const filterUserProfiles = useMemo(() => {
+    if (typeof filters.projectId !== "number") return users;
     const project = projects.find((item) => item.id === filters.projectId);
-    return project ? assignees.filter((person) => project.members.some((member) => member.userId === person.id)) : assignees;
-  }, [assignees, filters.projectId, projects]);
-  const hasActiveFilters = filters.query.trim() !== "" || filters.projectId !== (roadmapMode === "all" ? "all" : selectedRoadmapProjectId) || filters.assigneeId !== "all" || filters.status !== "all";
+    return project ? users.filter((person) => project.members.some((member) => member.userId === person.id)) : users;
+  }, [users, filters.projectId, projects]);
+  const hasActiveFilters = filters.query.trim() !== "" || filters.projectId !== (roadmapMode === "all" ? "all" : selectedRoadmapProjectId) || filters.ownerUserId !== "all" || filters.status !== "all";
   const pastMissingTaskIds = useMemo(() => {
     if (!reportSnapshotsLoaded) return new Set<number>();
     const snapshotByTask = new Map(reportSnapshots.map((snapshot) => [snapshot.taskId, snapshot]));
@@ -155,7 +156,7 @@ function App() {
     setRoadmapMode("select");
     setSelectedRoadmapProjectId(null);
     setSelectedId(null);
-    setFilters({ query: "", projectId: "all", assigneeId: "all", status: "all" });
+    setFilters({ query: "", projectId: "all", ownerUserId: "all", status: "all" });
     setView("wbs");
   }
 
@@ -163,14 +164,14 @@ function App() {
     setRoadmapMode("project");
     setSelectedRoadmapProjectId(project.id);
     setSelectedId(null);
-    setFilters({ query: "", projectId: project.id, assigneeId: "all", status: "all" });
+    setFilters({ query: "", projectId: project.id, ownerUserId: "all", status: "all" });
   }
 
   function openAllRoadmap() {
     setRoadmapMode("all");
     setSelectedRoadmapProjectId(null);
     setSelectedId(null);
-    setFilters({ query: "", projectId: "all", assigneeId: "all", status: "all" });
+    setFilters({ query: "", projectId: "all", ownerUserId: "all", status: "all" });
   }
 
   function openTaskCreate(parentTaskId: number | null = null) {
@@ -230,6 +231,9 @@ function App() {
         <button className={view === "users" ? "active" : ""} onClick={() => setView("users")} aria-label="ユーザー">
           <span aria-hidden="true">♙</span><small>ユーザー</small>
         </button>
+        <button className={view === "attendance" ? "active" : ""} onClick={() => setView("attendance")} aria-label="勤怠・休暇">
+          <span aria-hidden="true">◴</span><small>勤怠</small>
+        </button>
         <button className={view === "settings" ? "active" : ""} onClick={() => setView("settings")} aria-label="設定">
           <span aria-hidden="true">⚙</span><small>設定</small>
         </button>
@@ -238,15 +242,17 @@ function App() {
       {error && <div className="global-error error" role="alert"><span>{error}</span><button onClick={() => setError(null)}>閉じる</button></div>}
 
       {view === "home" ? (
-        <HomeScreen tasks={tasks} projects={projects} users={assignees} leaves={userLeaves} countryCode={settings.countryCode} today={currentDate} loading={loading} onNavigate={(nextView) => nextView === "wbs" ? openWbsProjectSelection() : setView(nextView)} onOpenTask={(task) => { setRoadmapMode(task.projectId === null ? "all" : "project"); setSelectedRoadmapProjectId(task.projectId); setFilters({ query: "", projectId: task.projectId ?? "all", assigneeId: "all", status: "all" }); setSelectedId(task.id); setView("wbs"); }} />
+        <HomeScreen tasks={tasks} projects={projects} users={users} leaves={userLeaves} countryCode={settings.countryCode} today={currentDate} loading={loading} onNavigate={(nextView) => nextView === "wbs" ? openWbsProjectSelection() : setView(nextView)} onOpenTask={(task) => { setRoadmapMode(task.projectId === null ? "all" : "project"); setSelectedRoadmapProjectId(task.projectId); setFilters({ query: "", projectId: task.projectId ?? "all", ownerUserId: "all", status: "all" }); setSelectedId(task.id); setView("wbs"); }} />
       ) : view === "analysis" ? (
         <AnalysisScreen projects={projects} tasks={tasks} today={currentDate} loading={loading} />
       ) : view === "reports" ? (
         <DailyReportScreen projects={projects} tasks={tasks} snapshots={reportSnapshots} reportDate={reportDate} loading={loading || reportLoading} ancestorDepth={settings.dailyReportAncestorDepth} onOpenWbs={(projectId) => { const project = projects.find((item) => item.id === projectId); if (project) { openProjectRoadmap(project); setView("wbs"); } else openWbsProjectSelection(); }} />
       ) : view === "users" ? (
-        <UsersScreen users={assignees} leaves={userLeaves} countryCode={settings.countryCode} today={currentDate} onChanged={refresh} onError={setError} />
+        <UsersScreen users={users} onChanged={refresh} onError={setError} />
+      ) : view === "attendance" ? (
+        <AttendanceScreen users={users} leaves={userLeaves} countryCode={settings.countryCode} today={currentDate} onChanged={refresh} onError={setError} onOpenUsers={() => setView("users")} />
       ) : view === "projects" ? (
-        <ProjectsScreen projects={projects} users={assignees} onChanged={refresh} onError={setError} />
+        <ProjectsScreen projects={projects} users={users} onChanged={refresh} onError={setError} />
       ) : view === "settings" ? (
         <SettingsScreen settings={settings} onSaved={setSettings} onError={setError} />
       ) : roadmapMode === "select" ? (
@@ -267,8 +273,8 @@ function App() {
             </div>
           </header>
 
-          {!loading && assignees.length === 0 && <section className="setup-banner" aria-label="WBSの準備状況"><div><span className="setup-icon">↗</span><div><strong>WBSをチームの計画として活用しましょう</strong><p>ユーザーを登録して案件メンバーに追加すると、WBSへ責任者を割り当てられます。</p></div></div><div><button className="quiet-button" onClick={() => setView("users")}>ユーザーを登録</button></div></section>}
-          {!loading && roadmapLeaveAttention.length > 0 && <section className={`leave-warning-banner ${roadmapLeaveAttention.some(({ approval }) => approval.state === "urgent") ? "urgent" : "pending"}`} aria-label="休暇の未承認状況"><div><strong>{roadmapLeaveAttention.some(({ approval }) => approval.state === "urgent") ? "本日中に休暇承認の対応が必要です" : "休暇の承認待ちがあります"}</strong><p>{roadmapLeaveAttention.slice(0, 3).map(({ leave, approval }) => `${leave.userName} ${leave.date}：${pendingApprovalLabel(approval.state === "urgent" ? approval.urgent : approval.pending)}`).join(" ／ ")}{roadmapLeaveAttention.length > 3 ? ` ほか${roadmapLeaveAttention.length - 3}件` : ""}</p></div><button className="quiet-button" onClick={() => setView("users")}>承認状況を確認</button></section>}
+          {!loading && users.length === 0 && <section className="setup-banner" aria-label="WBSの準備状況"><div><span className="setup-icon">↗</span><div><strong>WBSをチームの計画として活用しましょう</strong><p>ユーザーを登録して案件メンバーに追加すると、WBSへ責任者を割り当てられます。</p></div></div><div><button className="quiet-button" onClick={() => setView("users")}>ユーザーを登録</button></div></section>}
+          {!loading && roadmapLeaveAttention.length > 0 && <section className={`leave-warning-banner ${roadmapLeaveAttention.some(({ approval }) => approval.state === "urgent") ? "urgent" : "pending"}`} aria-label="休暇の未承認状況"><div><strong>{roadmapLeaveAttention.some(({ approval }) => approval.state === "urgent") ? "本日中に休暇承認の対応が必要です" : "休暇の承認待ちがあります"}</strong><p>{roadmapLeaveAttention.slice(0, 3).map(({ leave, approval }) => `${leave.userName} ${leave.date}：${pendingApprovalLabel(approval.state === "urgent" ? approval.urgent : approval.pending)}`).join(" ／ ")}{roadmapLeaveAttention.length > 3 ? ` ほか${roadmapLeaveAttention.length - 3}件` : ""}</p></div><button className="quiet-button" onClick={() => setView("attendance")}>承認状況を確認</button></section>}
 
           {!loading && selectedRoadmapProject && <MilestonePanel milestones={roadmapMilestones} project={selectedRoadmapProject} today={formatISODate(new Date())} onCreate={() => setMilestoneEditor("new")} onEdit={setMilestoneEditor} />}
 
@@ -281,19 +287,19 @@ function App() {
             </section>
             <section className="wbs-controls" aria-label="WBSの表示条件">
               <label className="search-field"><span>検索</span><input type="search" value={filters.query} onChange={(event) => setFilters({ ...filters, query: event.currentTarget.value })} placeholder="WBS名・責任者" /></label>
-              {roadmapMode === "all" && <label><span>案件</span><select value={filters.projectId} onChange={(event) => setFilters({ ...filters, projectId: parseFilterValue(event.currentTarget.value), assigneeId: "all" })}><option value="all">すべての案件</option><option value="unset">案件未設定</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>}
-              <label><span>責任者</span><select value={filters.assigneeId} onChange={(event) => setFilters({ ...filters, assigneeId: parseFilterValue(event.currentTarget.value) })}><option value="all">すべての責任者</option><option value="unset">未設定</option>{filterAssignees.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label>
+              {roadmapMode === "all" && <label><span>案件</span><select value={filters.projectId} onChange={(event) => setFilters({ ...filters, projectId: parseFilterValue(event.currentTarget.value), ownerUserId: "all" })}><option value="all">すべての案件</option><option value="unset">案件未設定</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>}
+              <label><span>責任者</span><select value={filters.ownerUserId} onChange={(event) => setFilters({ ...filters, ownerUserId: parseFilterValue(event.currentTarget.value) })}><option value="all">すべての責任者</option><option value="unset">未設定</option>{filterUserProfiles.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label>
               <label><span>状態</span><select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.currentTarget.value as WbsFilters["status"] })}><option value="all">すべての状態</option>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-              <fieldset className="group-switch"><legend>まとめ方</legend><button type="button" className={groupBy === "project" ? "active" : ""} aria-pressed={groupBy === "project"} onClick={() => setGroupBy("project")}>案件</button><button type="button" className={groupBy === "assignee" ? "active" : ""} aria-pressed={groupBy === "assignee"} onClick={() => setGroupBy("assignee")}>責任者</button></fieldset>
+              <fieldset className="group-switch"><legend>まとめ方</legend><button type="button" className={groupBy === "project" ? "active" : ""} aria-pressed={groupBy === "project"} onClick={() => setGroupBy("project")}>案件</button><button type="button" className={groupBy === "user" ? "active" : ""} aria-pressed={groupBy === "user"} onClick={() => setGroupBy("user")}>責任者</button></fieldset>
             </section>
           </>}
 
-          {loading ? <div className="loading-card">WBSを読み込んでいます…</div> : roadmapTasks.length === 0 && roadmapMilestones.length === 0 ? <section className="wbs-empty"><span>▦</span><h2>{roadmapMode === "all" ? "最初のWBSを追加しましょう" : "このプロジェクトの最初のタスクを追加しましょう"}</h2><p>責任者と日程を紐づけると、ロードマップ上で予定と進捗をまとめて確認できます。</p><button className="primary-button" onClick={() => openTaskCreate()}>＋ ロードマップにタスクを追加</button></section> : visibleTasks.length === 0 && roadmapTasks.length > 0 ? <section className="wbs-empty filtered"><span>⌕</span><h2>条件に一致するWBSがありません</h2><p>検索語または絞り込み条件を変更してください。</p>{hasActiveFilters && <button className="quiet-button" onClick={() => setFilters({ query: "", projectId: roadmapMode === "all" ? "all" : selectedRoadmapProjectId ?? "all", assigneeId: "all", status: "all" })}>絞り込みを解除</button>}</section> : <TimelineBoard tasks={visibleTasks} allTasks={roadmapTasks} milestones={roadmapMilestones.filter((milestone) => filters.projectId === "all" || milestone.projectId === filters.projectId)} assignees={assignees} projects={projects} groupBy={groupBy} countryCode={settings.countryCode} selectedId={selectedId} pastMissingTaskIds={pastMissingTaskIds} onSelect={(task) => setSelectedId(task.id)} onCreateSubtask={(task) => openTaskCreate(task.id)} onShowHistory={setHistoryTask} onRecordProgress={openProgress} onSelectMilestone={setMilestoneEditor} onScheduleChange={updateSchedule} />}
-          {selectedTask && <aside className="task-drawer" aria-label="タスク詳細"><button className="drawer-close" aria-label="詳細を閉じる" onClick={() => setSelectedId(null)}>×</button><TaskEditor task={selectedTask} tasks={roadmapTasks} countryCode={settings.countryCode} projects={projects} assignees={assignees} pastMissing={pastMissingTaskIds.has(selectedTask.id)} onChanged={refresh} onCreateChild={() => openTaskCreate(selectedTask.id)} onProgress={() => openProgress(selectedTask)} onDelete={() => void removeTask(selectedTask)} onError={setError} /></aside>}
+          {loading ? <div className="loading-card">WBSを読み込んでいます…</div> : roadmapTasks.length === 0 && roadmapMilestones.length === 0 ? <section className="wbs-empty"><span>▦</span><h2>{roadmapMode === "all" ? "最初のWBSを追加しましょう" : "このプロジェクトの最初のタスクを追加しましょう"}</h2><p>責任者と日程を紐づけると、ロードマップ上で予定と進捗をまとめて確認できます。</p><button className="primary-button" onClick={() => openTaskCreate()}>＋ ロードマップにタスクを追加</button></section> : visibleTasks.length === 0 && roadmapTasks.length > 0 ? <section className="wbs-empty filtered"><span>⌕</span><h2>条件に一致するWBSがありません</h2><p>検索語または絞り込み条件を変更してください。</p>{hasActiveFilters && <button className="quiet-button" onClick={() => setFilters({ query: "", projectId: roadmapMode === "all" ? "all" : selectedRoadmapProjectId ?? "all", ownerUserId: "all", status: "all" })}>絞り込みを解除</button>}</section> : <TimelineBoard tasks={visibleTasks} allTasks={roadmapTasks} milestones={roadmapMilestones.filter((milestone) => filters.projectId === "all" || milestone.projectId === filters.projectId)} users={users} projects={projects} groupBy={groupBy} countryCode={settings.countryCode} selectedId={selectedId} pastMissingTaskIds={pastMissingTaskIds} onSelect={(task) => setSelectedId(task.id)} onCreateSubtask={(task) => openTaskCreate(task.id)} onShowHistory={setHistoryTask} onRecordProgress={openProgress} onSelectMilestone={setMilestoneEditor} onScheduleChange={updateSchedule} />}
+          {selectedTask && <aside className="task-drawer" aria-label="タスク詳細"><button className="drawer-close" aria-label="詳細を閉じる" onClick={() => setSelectedId(null)}>×</button><TaskEditor task={selectedTask} tasks={roadmapTasks} countryCode={settings.countryCode} projects={projects} users={users} pastMissing={pastMissingTaskIds.has(selectedTask.id)} onChanged={refresh} onCreateChild={() => openTaskCreate(selectedTask.id)} onProgress={() => openProgress(selectedTask)} onDelete={() => void removeTask(selectedTask)} onError={setError} /></aside>}
         </main>
       )}
 
-      {showCreate && <TaskModal settings={settings} projects={projects} assignees={assignees} tasks={roadmapTasks} initialProjectId={selectedRoadmapProjectId} initialParentTaskId={createParentTaskId} onClose={() => setShowCreate(false)} onSaved={async () => { setShowCreate(false); await refresh(); }} onError={setError} />}
+      {showCreate && <TaskModal settings={settings} projects={projects} users={users} tasks={roadmapTasks} initialProjectId={selectedRoadmapProjectId} initialParentTaskId={createParentTaskId} onClose={() => setShowCreate(false)} onSaved={async () => { setShowCreate(false); await refresh(); }} onError={setError} />}
       {progressTask && <ProgressModal task={progressTask.task} pastOnly={progressTask.pastOnly} reportDate={reportDate} onClose={() => setProgressTask(null)} onSaved={async () => { setProgressTask(null); await refresh(); setReportSnapshots(await listDailyProgressSnapshots(reportDate)); }} onError={setError} />}
       {historyTask && <HistoryModal task={historyTask} onClose={() => setHistoryTask(null)} onError={setError} />}
       {reschedule && <RescheduleModal task={reschedule.task} changes={reschedule.changes} tasks={tasks} onClose={() => setReschedule(null)} onSaved={async () => { setReschedule(null); await refresh(); }} onError={setError} />}
@@ -330,13 +336,13 @@ function MilestoneModal({ milestone, project, onClose, onSaved, onError }: { mil
   </Modal>;
 }
 
-function TaskModal({ settings, projects, assignees, tasks, initialProjectId, initialParentTaskId, onClose, onSaved, onError }: {
-  settings: AppSettings; projects: Project[]; assignees: Assignee[]; tasks: WbsTask[]; initialProjectId: number | null; initialParentTaskId: number | null; onClose: () => void; onSaved: () => Promise<void>; onError: (value: string | null) => void;
+function TaskModal({ settings, projects, users, tasks, initialProjectId, initialParentTaskId, onClose, onSaved, onError }: {
+  settings: AppSettings; projects: Project[]; users: UserProfile[]; tasks: WbsTask[]; initialProjectId: number | null; initialParentTaskId: number | null; onClose: () => void; onSaved: () => Promise<void>; onError: (value: string | null) => void;
 }) {
   const today = formatISODate(new Date());
   const parentTask = tasks.find((task) => task.id === initialParentTaskId);
   const [form, setForm] = useState<WbsTaskForm>({
-    title: "", description: "", projectId: parentTask?.projectId ?? initialProjectId, parentTaskId: initialParentTaskId, prerequisiteTaskId: null, prerequisiteTaskIds: [], assigneeId: null, status: "not_started", progress: 0,
+    title: "", description: "", projectId: parentTask?.projectId ?? initialProjectId, parentTaskId: initialParentTaskId, prerequisiteTaskIds: [], ownerUserId: null, status: "not_started", progress: 0,
     countryCode: settings.countryCode, plannedStart: today,
     plannedEnd: calculateEndDate(today, 1, settings.countryCode), businessDays: "",
     actualStart: null, actualEnd: null,
@@ -368,7 +374,7 @@ function TaskModal({ settings, projects, assignees, tasks, initialProjectId, ini
 
   return <Modal title={initialParentTaskId === null ? "ロードマップにタスクを追加" : "サブタスクを追加"} onClose={onClose}>
     <form className="modal-form" onSubmit={submit}>
-      <FormFields form={form} setForm={setForm} projects={projects} assignees={assignees} tasks={tasks} currentTaskId={null} includeActual={false} />
+      <FormFields form={form} setForm={setForm} projects={projects} users={users} tasks={tasks} currentTaskId={null} includeActual={false} />
       <div className="preview-card">
         <span>PREVIEW</span>
         <div><small>終了予定日</small><strong>{formatLongDate(end)}</strong></div>
@@ -385,8 +391,8 @@ function TaskModal({ settings, projects, assignees, tasks, initialProjectId, ini
   </Modal>;
 }
 
-function TaskEditor({ task, tasks, countryCode, projects, assignees, pastMissing, onChanged, onCreateChild, onProgress, onDelete, onError }: {
-  task: WbsTask; tasks: WbsTask[]; countryCode: string; projects: Project[]; assignees: Assignee[]; pastMissing: boolean; onChanged: () => Promise<void>; onCreateChild: () => void; onProgress: () => void; onDelete: () => void; onError: (value: string | null) => void;
+function TaskEditor({ task, tasks, countryCode, projects, users, pastMissing, onChanged, onCreateChild, onProgress, onDelete, onError }: {
+  task: WbsTask; tasks: WbsTask[]; countryCode: string; projects: Project[]; users: UserProfile[]; pastMissing: boolean; onChanged: () => Promise<void>; onCreateChild: () => void; onProgress: () => void; onDelete: () => void; onError: (value: string | null) => void;
 }) {
   const [form, setForm] = useState<WbsTaskForm>({ ...task, countryCode });
   const [saving, setSaving] = useState(false);
@@ -410,7 +416,7 @@ function TaskEditor({ task, tasks, countryCode, projects, assignees, pastMissing
   return <form className="panel-form" onSubmit={submit}>
     <div className="panel-title"><div><p className="eyebrow">DETAIL</p><h2>タスクを編集</h2></div><span className={`status-badge ${form.status}`}>{statusLabels[form.status]}</span></div>
     <div className={`task-lock-state ${task.finalized ? "finalized" : "draft"}`}><div><strong>{task.finalized ? "計画確定済み" : "編集中"}</strong><span>{task.finalized ? "日程変更にはロードマップ上で理由の記録が必要です。" : "確定するまで日程を自由に調整できます。"}</span></div>{!task.finalized && <button type="button" className="quiet-button" disabled={saving} onClick={() => void finalize()}>タスクの状態を確定</button>}</div>
-    <FormFields form={form} setForm={setForm} projects={projects} assignees={assignees} tasks={tasks} currentTaskId={task.id} includeActual scheduleLocked={task.finalized} />
+    <FormFields form={form} setForm={setForm} projects={projects} users={users} tasks={tasks} currentTaskId={task.id} includeActual scheduleLocked={task.finalized} />
     <div className="progress-block"><div><span>{hasChildren ? "子タスクからの進捗" : "進捗率"}</span><strong>{form.progress}%</strong></div>{hasChildren ? <small>直属のサブタスクを営業日数で重み付けし、深い階層まで自動集計しています。</small> : <><input aria-label="進捗率" type="range" min="0" max="100" step="5" disabled={task.finalized} value={form.progress} onChange={(e) => setForm({ ...form, progress: Number(e.currentTarget.value) })} />{task.finalized && <small>確定後は「今日の進捗」から記録します。</small>}</>}</div>
     <button type="button" className="child-task-button" onClick={onCreateChild}>＋ ロードマップ上でサブタスクを追加</button>
     <div className="editor-actions">{dailyProgressActionLabel(task, hasChildren, pastMissing) && <button type="button" className="quiet-button" onClick={onProgress}>{dailyProgressActionLabel(task, false, pastMissing)}</button>}<button className="primary-button" disabled={saving}>{saving ? "保存中…" : "変更を保存"}</button></div>
@@ -418,22 +424,22 @@ function TaskEditor({ task, tasks, countryCode, projects, assignees, pastMissing
   </form>;
 }
 
-function FormFields({ form, setForm, projects, assignees, tasks, currentTaskId, includeActual, scheduleLocked = false }: {
-  form: WbsTaskForm; setForm: (value: WbsTaskForm) => void; projects: Project[]; assignees: Assignee[]; tasks: WbsTask[]; currentTaskId: number | null; includeActual: boolean; scheduleLocked?: boolean;
+function FormFields({ form, setForm, projects, users, tasks, currentTaskId, includeActual, scheduleLocked = false }: {
+  form: WbsTaskForm; setForm: (value: WbsTaskForm) => void; projects: Project[]; users: UserProfile[]; tasks: WbsTask[]; currentTaskId: number | null; includeActual: boolean; scheduleLocked?: boolean;
 }) {
   const selectedProject = projects.find((project) => project.id === form.projectId);
-  const availableAssignees = selectedProject
-    ? assignees.filter((person) => selectedProject.members.some((member) => member.userId === person.id))
-    : assignees;
+  const availableUserProfiles = selectedProject
+    ? users.filter((person) => selectedProject.members.some((member) => member.userId === person.id))
+    : users;
   const availableParents = parentTaskCandidates(tasks, form.projectId, currentTaskId);
   const availablePrerequisites = prerequisiteTaskCandidates(tasks, form.projectId, form.parentTaskId, currentTaskId);
   return <div className="field-grid">
     <label className="wide">タスク名<input value={form.title} maxLength={120} required onChange={(e) => setForm({ ...form, title: e.currentTarget.value })} placeholder="例：要件定義レビュー" /></label>
     <label className="wide">作業の概要<textarea value={form.description} maxLength={1000} rows={3} onChange={(e) => setForm({ ...form, description: e.currentTarget.value })} placeholder="担当者が行う作業、完了条件、報告時に共有したい前提" /></label>
-    <label>所属案件<select value={form.projectId ?? ""} onChange={(e) => { const projectId = e.currentTarget.value ? Number(e.currentTarget.value) : null; const project = projects.find((item) => item.id === projectId); const keepAssignee = !project || project.members.some((member) => member.userId === form.assigneeId); const keepParent = tasks.some((task) => task.id === form.parentTaskId && task.projectId === projectId); const parentTaskId = keepParent ? form.parentTaskId : null; const prerequisiteTaskIds = (form.prerequisiteTaskIds ?? []).filter((id) => tasks.some((task) => task.id === id && task.projectId === projectId && (task.parentTaskId ?? null) === parentTaskId)); setForm({ ...form, projectId, parentTaskId, prerequisiteTaskId: prerequisiteTaskIds[0] ?? null, prerequisiteTaskIds, assigneeId: keepAssignee ? form.assigneeId : null }); }}><option value="">案件未設定</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
-    <label>担当者<select value={form.assigneeId ?? ""} onChange={(e) => setForm({ ...form, assigneeId: e.currentTarget.value ? Number(e.currentTarget.value) : null })}><option value="">未設定</option>{availableAssignees.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select>{selectedProject && availableAssignees.length === 0 && <small>この案件にはユーザーが紐づいていません。</small>}</label>
-    <label className="wide">親タスク<select value={form.parentTaskId ?? ""} onChange={(e) => { const parentTaskId = e.currentTarget.value ? Number(e.currentTarget.value) : null; const prerequisiteTaskIds = (form.prerequisiteTaskIds ?? []).filter((id) => tasks.some((task) => task.id === id && task.projectId === form.projectId && (task.parentTaskId ?? null) === parentTaskId)); setForm({ ...form, parentTaskId, prerequisiteTaskId: prerequisiteTaskIds[0] ?? null, prerequisiteTaskIds }); }}><option value="">親なし（最上位）</option>{availableParents.map((task) => <option key={task.id} value={task.id}>{task.parentTaskTitle ? `${task.parentTaskTitle} › ` : ""}{task.title}</option>)}</select><small>子タスクにも同じ操作で子を追加でき、階層を深くできます。</small></label>
-    <fieldset className="wide prerequisite-picker"><legend>完了が前提となるタスク（複数選択可）</legend>{availablePrerequisites.length === 0 ? <p>選択できる同階層タスクはありません。</p> : availablePrerequisites.map((task) => { const checked = (form.prerequisiteTaskIds ?? []).includes(task.id); return <label key={task.id}><input type="checkbox" checked={checked} onChange={() => { const prerequisiteTaskIds = checked ? (form.prerequisiteTaskIds ?? []).filter((id) => id !== task.id) : [...(form.prerequisiteTaskIds ?? []), task.id]; setForm({ ...form, prerequisiteTaskId: prerequisiteTaskIds[0] ?? null, prerequisiteTaskIds }); }} /><span><strong>{task.title}</strong><small>{task.plannedEnd} 完了予定</small></span></label>; })}<small>同じ案件・同じ親タスク配下から複数選択できます。循環する組み合わせは保存できません。</small></fieldset>
+    <label>所属案件<select value={form.projectId ?? ""} onChange={(e) => { const projectId = e.currentTarget.value ? Number(e.currentTarget.value) : null; const project = projects.find((item) => item.id === projectId); const keepUserProfile = !project || project.members.some((member) => member.userId === form.ownerUserId); const keepParent = tasks.some((task) => task.id === form.parentTaskId && task.projectId === projectId); const parentTaskId = keepParent ? form.parentTaskId : null; const prerequisiteTaskIds = (form.prerequisiteTaskIds ?? []).filter((id) => tasks.some((task) => task.id === id && task.projectId === projectId && (task.parentTaskId ?? null) === parentTaskId)); setForm({ ...form, projectId, parentTaskId, prerequisiteTaskIds, ownerUserId: keepUserProfile ? form.ownerUserId : null }); }}><option value="">案件未設定</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
+    <label>担当者<select value={form.ownerUserId ?? ""} onChange={(e) => setForm({ ...form, ownerUserId: e.currentTarget.value ? Number(e.currentTarget.value) : null })}><option value="">未設定</option>{availableUserProfiles.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select>{selectedProject && availableUserProfiles.length === 0 && <small>この案件にはユーザーが紐づいていません。</small>}</label>
+    <label className="wide">親タスク<select value={form.parentTaskId ?? ""} onChange={(e) => { const parentTaskId = e.currentTarget.value ? Number(e.currentTarget.value) : null; const prerequisiteTaskIds = (form.prerequisiteTaskIds ?? []).filter((id) => tasks.some((task) => task.id === id && task.projectId === form.projectId && (task.parentTaskId ?? null) === parentTaskId)); setForm({ ...form, parentTaskId, prerequisiteTaskIds }); }}><option value="">親なし（最上位）</option>{availableParents.map((task) => <option key={task.id} value={task.id}>{task.parentTaskTitle ? `${task.parentTaskTitle} › ` : ""}{task.title}</option>)}</select><small>子タスクにも同じ操作で子を追加でき、階層を深くできます。</small></label>
+    <fieldset className="wide prerequisite-picker"><legend>完了が前提となるタスク（複数選択可）</legend>{availablePrerequisites.length === 0 ? <p>選択できる同階層タスクはありません。</p> : availablePrerequisites.map((task) => { const checked = (form.prerequisiteTaskIds ?? []).includes(task.id); return <label key={task.id}><input type="checkbox" checked={checked} onChange={() => { const prerequisiteTaskIds = checked ? (form.prerequisiteTaskIds ?? []).filter((id) => id !== task.id) : [...(form.prerequisiteTaskIds ?? []), task.id]; setForm({ ...form, prerequisiteTaskIds }); }} /><span><strong>{task.title}</strong><small>{task.plannedEnd} 完了予定</small></span></label>; })}<small>同じ案件・同じ親タスク配下から複数選択できます。循環する組み合わせは保存できません。</small></fieldset>
     <label>開始予定日<input type="date" required disabled={scheduleLocked} value={form.plannedStart} onChange={(e) => setForm({ ...form, plannedStart: e.currentTarget.value })} /></label>
     <label>営業日数<input type="number" min="1" max="999" placeholder="1" value={form.businessDays} disabled={scheduleLocked} onChange={(e) => setForm({ ...form, businessDays: parseBusinessDaysInput(e.currentTarget.value) })} />{!includeActual && <small>未入力の場合は1営業日です。</small>}</label>
     {includeActual && <>
@@ -532,8 +538,8 @@ function HistoryModal({ task, onClose, onError }: { task: WbsTask; onClose: () =
   const [entries, setEntries] = useState<TaskTreeHistoryEntry[] | null>(null);
   const [scope, setScope] = useState<"all" | "self">("all");
   const [expanded, setExpanded] = useState(false);
-  useEffect(() => { let active = true; void listTaskTreeHistory(task.id).then((result) => { if (active) setEntries(result); }).catch((cause) => onError(toMessage(cause))); return () => { active = false; }; }, [onError, task.id]);
-  const labels: Record<WorkHistoryEntry["type"], string> = { created: "サブタスク追加", finalized: "計画確定", rescheduled: "リスケ", progress: "進捗記録", delay: "遅延理由" };
+  useEffect(() => { let active = true; void listTaskTreeActivity(task.id).then((result) => { if (active) setEntries(result); }).catch((cause) => onError(toMessage(cause))); return () => { active = false; }; }, [onError, task.id]);
+  const labels: Record<ActivityEvent["type"], string> = { created: "サブタスク追加", finalized: "計画確定", rescheduled: "リスケ", progress: "進捗記録", delay: "遅延理由" };
   const ownCount = entries?.filter((entry) => entry.depth === 0).length ?? 0;
   const childCount = (entries?.length ?? 0) - ownCount;
   const filtered = entries?.filter((entry) => scope === "all" || entry.depth === 0) ?? [];

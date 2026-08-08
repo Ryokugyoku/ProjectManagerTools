@@ -4,7 +4,7 @@ import { availableWorkdays, deriveParentProgress, expectedProgress, isTaskDelaye
 
 const base: WbsTask = {
   id: 1, title: "実装", description: "", projectId: 1, projectName: "案件", parentTaskId: null,
-  parentTaskTitle: null, assigneeId: 2, assigneeName: "山田", status: "in_progress", progress: 20,
+  parentTaskTitle: null, ownerUserId: 2, ownerUserName: "山田", status: "in_progress", progress: 20,
   countryCode: "JP", plannedStart: "2026-08-03", plannedEnd: "2026-08-14", businessDays: 10,
   actualStart: null, actualEnd: null, finalized: true,
 };
@@ -29,17 +29,17 @@ describe("休暇を含む計画進捗の組み合わせ", () => {
   const plan = { ...base, plannedStart: "2026-08-03", plannedEnd: "2026-08-05", businessDays: 3 };
 
   it("3営業日のうち1日全休なら、稼働可能な2日へ50%ずつ配分する", () => {
-    const assigneeLeaves = [{ id: 1, userId: 2, userName: "山田", date: "2026-08-04", type: "planned" as const, unit: "full_day" as const, reason: "", customerApproved: false, managerApproved: false, workflowApproved: false, createdAt: "2026-08-01T00:00:00Z" }];
-    expect(availableWorkdays(plan.plannedStart, plan.plannedEnd, plan.countryCode, assigneeLeaves)).toBe(2);
-    expect(expectedProgress({ ...plan, assigneeLeaves }, "2026-08-03")).toBe(50);
-    expect(expectedProgress({ ...plan, assigneeLeaves }, "2026-08-04")).toBe(50);
-    expect(expectedProgress({ ...plan, assigneeLeaves }, "2026-08-05")).toBe(100);
+    const ownerLeaves = [{ id: 1, userId: 2, userName: "山田", date: "2026-08-04", type: "planned" as const, unit: "full_day" as const, reason: "", customerApproved: false, managerApproved: false, workflowApproved: false, createdAt: "2026-08-01T00:00:00Z" }];
+    expect(availableWorkdays(plan.plannedStart, plan.plannedEnd, plan.countryCode, ownerLeaves)).toBe(2);
+    expect(expectedProgress({ ...plan, ownerLeaves }, "2026-08-03")).toBe(50);
+    expect(expectedProgress({ ...plan, ownerLeaves }, "2026-08-04")).toBe(50);
+    expect(expectedProgress({ ...plan, ownerLeaves }, "2026-08-05")).toBe(100);
   });
 
   it("午前終了時は、午前半休と午後半休で期待進捗を分ける", () => {
     const leave = { id: 1, userId: 2, userName: "山田", date: "2026-08-04", type: "planned" as const, reason: "", customerApproved: false, managerApproved: false, workflowApproved: false, createdAt: "2026-08-01T00:00:00Z" };
-    expect(expectedProgress({ ...plan, assigneeLeaves: [{ ...leave, unit: "morning" }] }, "2026-08-04", "morning")).toBe(40);
-    expect(expectedProgress({ ...plan, assigneeLeaves: [{ ...leave, unit: "afternoon" }] }, "2026-08-04", "morning")).toBe(60);
+    expect(expectedProgress({ ...plan, ownerLeaves: [{ ...leave, unit: "morning" }] }, "2026-08-04", "morning")).toBe(40);
+    expect(expectedProgress({ ...plan, ownerLeaves: [{ ...leave, unit: "afternoon" }] }, "2026-08-04", "morning")).toBe(60);
   });
 });
 

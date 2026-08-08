@@ -25,7 +25,7 @@
   },
   "plugins": {
     "sql": {
-      "preload": ["sqlite:project-manager.db"]
+      "preload": ["sqlite:project-manager-v2.db"]
     }
   },
   "bundle": {

@@ -7,7 +7,7 @@ import type { Project } from "../../src/lib/projects";
 import type { DailyProgressSnapshot, WbsTask } from "../../src/lib/wbs";
 
 const project: Project = { id: 1, name: "基幹刷新", code: "CORE", clientName: "", description: "", status: "active", priority: "high", plannedStart: null, plannedEnd: null, members: [] };
-const root: WbsTask = { id: 1, title: "設計", description: "全体設計", projectId: 1, projectName: "基幹刷新", parentTaskId: null, parentTaskTitle: null, assigneeId: 10, assigneeName: "山田", status: "in_progress", progress: 50, countryCode: "JP", plannedStart: "2026-08-03", plannedEnd: "2026-08-14", businessDays: 10, actualStart: null, actualEnd: null, finalized: true };
+const root: WbsTask = { id: 1, title: "設計", description: "全体設計", projectId: 1, projectName: "基幹刷新", parentTaskId: null, parentTaskTitle: null, ownerUserId: 10, ownerUserName: "山田", status: "in_progress", progress: 50, countryCode: "JP", plannedStart: "2026-08-03", plannedEnd: "2026-08-14", businessDays: 10, actualStart: null, actualEnd: null, finalized: true };
 const child: WbsTask = { ...root, id: 2, title: "API設計", description: "API仕様を確定する", parentTaskId: 1, parentTaskTitle: "設計" };
 const grandchild: WbsTask = { ...child, id: 3, title: "認証API", description: "認証方式を整理する", parentTaskId: 2, parentTaskTitle: "API設計" };
 const snapshot: DailyProgressSnapshot = { taskId: 3, date: "2026-08-07", dailyProgress: 10, cumulativeProgress: 40, note: "認証方式をレビューしました", latestHistoryType: "progress", latestHistoryDetails: "今日 +10% / 累計 40%", rescheduleReason: "顧客レビュー日変更", delayReason: "セキュリティ回答待ち" };
@@ -81,7 +81,7 @@ describe("daily project report", () => {
   });
 
   it("names successor tasks when a delayed prerequisite reaches their planned start", () => {
-    const successor = { ...grandchild, id: 30, title: "結合テスト", prerequisiteTaskId: 3, plannedStart: "2026-08-14" };
+    const successor = { ...grandchild, id: 30, title: "結合テスト", prerequisiteTaskIds: [3], plannedStart: "2026-08-14" };
     const markup = renderToStaticMarkup(<DailyReportScreen projects={[project]} tasks={[root, child, grandchild, successor]} snapshots={[snapshot]} reportDate="2026-08-07" loading={false} ancestorDepth={3} onOpenWbs={() => undefined} />);
     expect(markup).toContain("影響あり");
     expect(markup).toContain("「結合テスト」の開始予定に重なる見込み");

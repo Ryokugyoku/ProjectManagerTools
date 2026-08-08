@@ -42,7 +42,7 @@ ProjectManagerTools/
 | 画像など import する素材 | `src/assets/` | コンポーネントと一緒にバンドルする素材だけ |
 | そのまま配信する素材 | `public/` | import やビルド時変換を必要としないものだけ |
 | ネイティブ初期化・Rust 処理 | `src-tauri/src/` | 表示レイアウトを持ち込まない |
-| DB スキーマ変更 | `src-tauri/migrations/` | 適用済みファイルを上書きせず、新しい連番を追加する |
+| DB スキーマ変更 | `src-tauri/migrations/` | v2 は `0001_v2_baseline.sql` を単一ベースラインとし、次の変更から連番を追加する |
 | 権限変更 | `src-tauri/capabilities/` | 必要最小限とし、機能実装と同時に確認する |
 | 継続的な規約・設計判断 | `Documentation/` | 作業ログや一時メモは置かない |
 | 再利用する開発操作 | `script/` | 製品ランタイムから呼び出さない |
@@ -68,7 +68,7 @@ ProjectManagerTools/
 - TypeScript の非表示モジュール: 内容を表す `camelCase.ts`
 - CSS: 対応する画面またはコンポーネント名に合わせる
 - Rust: `snake_case.rs`
-- DB マイグレーション: `NNNN_<変更内容>.sql`（既存番号の続き）
+- DB マイグレーション: `NNNN_<変更内容>.sql`（v2 ベースライン以降は既存番号の続き）
 - 文書: 意味が判別できる `UPPER_SNAKE_CASE.md`
 
 `utils`、`helpers`、`common` のように責務が分からない入れ物は作りません。既存名称を変更するときは、import、設定、文書を同時に更新します。

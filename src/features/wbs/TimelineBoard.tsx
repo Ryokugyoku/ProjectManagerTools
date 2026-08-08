@@ -5,7 +5,7 @@ import {
 } from "../../lib/calendar";
 import type { Project } from "../../lib/projects";
 import { milestoneColorTokens, type Milestone } from "../../lib/milestones";
-import type { Assignee, WbsTask } from "../../lib/wbs";
+import type { UserProfile, WbsTask } from "../../lib/wbs";
 import { currentDayCheckpoint, expectedProgress, progressHealth } from "../../lib/wbsPlanning";
 import { buildTimelineDateRange, buildTimelineMonths, buildWbsGroups, dailyProgressActionLabel, flattenWbsTaskTree, type WbsGroupBy } from "../../lib/wbsView";
 import { summarizeLeaveApprovals } from "../../lib/leaveApprovals";
@@ -25,11 +25,11 @@ type DragSession = {
 };
 type ContextMenuState = { task: WbsTask; x: number; y: number };
 
-export function TimelineBoard({ tasks, allTasks = tasks, milestones, assignees, projects, groupBy, countryCode, selectedId, pastMissingTaskIds = new Set(), onSelect, onCreateSubtask, onShowHistory, onRecordProgress, onSelectMilestone, onScheduleChange }: {
+export function TimelineBoard({ tasks, allTasks = tasks, milestones, users, projects, groupBy, countryCode, selectedId, pastMissingTaskIds = new Set(), onSelect, onCreateSubtask, onShowHistory, onRecordProgress, onSelectMilestone, onScheduleChange }: {
   tasks: WbsTask[];
   allTasks?: WbsTask[];
   milestones: Milestone[];
-  assignees: Assignee[];
+  users: UserProfile[];
   projects: Project[];
   groupBy: WbsGroupBy;
   countryCode: string;
@@ -59,7 +59,7 @@ export function TimelineBoard({ tasks, allTasks = tasks, milestones, assignees, 
     for (const milestone of milestones) result.set(milestone.dueDate, [...(result.get(milestone.dueDate) ?? []), milestone]);
     return result;
   }, [milestones]);
-  const groups = useMemo(() => buildWbsGroups(tasks, groupBy, projects, assignees), [assignees, groupBy, projects, tasks]);
+  const groups = useMemo(() => buildWbsGroups(tasks, groupBy, projects, users), [users, groupBy, projects, tasks]);
   const timelineBackground = useMemo(
     () => buildTimelineBackground(dates, countryCode, milestonesByDate, today),
     [countryCode, dates, milestonesByDate, today],
@@ -263,15 +263,15 @@ export function TimelineBoard({ tasks, allTasks = tasks, milestones, assignees, 
             return <div className={`roadmap-row ${selected ? "selected" : ""} ${hasChildren ? "parent-task" : ""}`} key={task.id} onContextMenu={(event) => openContextMenu(event, task)} onKeyDown={(event) => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) openContextMenu(event, task); }}>
               <button className="task-info" style={{ "--task-depth": depth } as React.CSSProperties} aria-pressed={selected} onClick={() => onSelect(task)}>
                 <span className="task-title-line"><strong>{depth > 0 && <span className="task-branch" aria-hidden="true">↳</span>}{task.title}</strong>{selected && <span className="task-selection-badge">選択中</span>}</span>
-                <small>{task.finalized ? "確定" : "編集中"} · {task.parentTaskTitle ? `親: ${task.parentTaskTitle} · ` : ""}{task.assigneeName ?? "責任者未設定"}</small>
+                <small>{task.finalized ? "確定" : "編集中"} · {task.parentTaskTitle ? `親: ${task.parentTaskTitle} · ` : ""}{task.ownerUserName ?? "責任者未設定"}</small>
               </button>
               <span className={`status-cell ${task.status}`}>{statusLabel(task.status)}</span>
               <span className={`progress-cell ${health}`} title={`${hasChildren ? "子タスクから自動集計" : "実績"} ${task.progress}% / 今日の予定 ${plannedProgress}%`}><strong>{task.progress}%</strong><small>{hasChildren ? "子から集計" : `予定 ${plannedProgress}%`}</small></span>
               <div className="timeline-cells" style={{ backgroundImage: timelineBackground }}>
-                {(task.assigneeLeaves ?? []).filter((leave) => leave.date >= range.start && leave.date <= range.end).map((leave) => {
+                {(task.ownerLeaves ?? []).filter((leave) => leave.date >= range.start && leave.date <= range.end).map((leave) => {
                   const approval = summarizeLeaveApprovals(leave, today, countryCode);
                   const approvalText = approval.state === "complete" ? "承認済み" : approval.state === "urgent" ? "本日中に承認対応" : "承認待ち";
-                  return <span key={leave.id} className={`task-leave-marker ${leave.unit} ${approval.state}`} style={{ left: dayDifference(range.start, leave.date) * DAY_WIDTH }} title={`${task.assigneeName ?? "担当者"}：${leave.date} ${leaveUnitLabel(leave.unit)}（${leave.type === "planned" ? "計画休" : "計画外"}・${approvalText}）${leave.reason ? ` ${leave.reason}` : ""}`} aria-label={`${task.assigneeName ?? "担当者"}は${leave.date}に${leaveUnitLabel(leave.unit)}、${approvalText}`}><i aria-hidden="true">{approval.state === "urgent" ? "!" : leave.unit === "full_day" ? "休" : leave.unit === "morning" ? "午" : "後"}</i></span>;
+                  return <span key={leave.id} className={`task-leave-marker ${leave.unit} ${approval.state}`} style={{ left: dayDifference(range.start, leave.date) * DAY_WIDTH }} title={`${task.ownerUserName ?? "担当者"}：${leave.date} ${leaveUnitLabel(leave.unit)}（${leave.type === "planned" ? "計画休" : "計画外"}・${approvalText}）${leave.reason ? ` ${leave.reason}` : ""}`} aria-label={`${task.ownerUserName ?? "担当者"}は${leave.date}に${leaveUnitLabel(leave.unit)}、${approvalText}`}><i aria-hidden="true">{approval.state === "urgent" ? "!" : leave.unit === "full_day" ? "休" : leave.unit === "morning" ? "午" : "後"}</i></span>;
                 })}
                 <div className={`timeline-bar ${task.status} ${health} ${hasChildren ? "has-children" : ""}`} style={{ left, width }}>
                   <button className="resize-handle left" aria-label={`${task.title}の営業日数を1日減らす。ドラッグで開始側を調整`} onPointerDown={(event) => begin(event, task, "left")} onClick={() => void clickDuration(task, -1)} onKeyDown={(event) => void keyboardAdjust(event, task, "left")}>−</button>

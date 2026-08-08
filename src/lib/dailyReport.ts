@@ -77,7 +77,7 @@ export function calculateTaskScheduleVariance(
 }
 
 export function calculateDelayImpact(task: WbsTask, tasks: WbsTask[], delayBusinessDays: number): DelayImpact {
-  const successorTasks = tasks.filter((candidate) => (candidate.prerequisiteTaskIds ?? (candidate.prerequisiteTaskId == null ? [] : [candidate.prerequisiteTaskId])).includes(task.id));
+  const successorTasks = tasks.filter((candidate) => (candidate.prerequisiteTaskIds ?? []).includes(task.id));
   const projectedEnd = shiftBusinessDate(task.plannedEnd, Math.ceil(Math.abs(delayBusinessDays)), task.countryCode);
   return {
     successorTasks,
@@ -127,8 +127,8 @@ export function buildDailyProjectReports(
     for (const task of projectTasks) {
       const snapshot = snapshotByTask.get(task.id);
       if (!snapshot || (snapshot.dailyProgress === null && !snapshot.latestHistoryDetails && !snapshot.rescheduleReason && !snapshot.delayReason)) continue;
-      const key = task.assigneeId === null ? "unset" : String(task.assigneeId);
-      const group = people.get(key) ?? { key, name: task.assigneeName ?? "担当者未設定", records: [] };
+      const key = task.ownerUserId === null ? "unset" : String(task.ownerUserId);
+      const group = people.get(key) ?? { key, name: task.ownerUserName ?? "担当者未設定", records: [] };
       group.records.push({ task, snapshot });
       people.set(key, group);
     }

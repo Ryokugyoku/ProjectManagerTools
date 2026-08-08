@@ -4,7 +4,7 @@ import { buildScheduleCascade, buildScheduleCascadeForNewChild, countBusinessDay
 
 const base: WbsTask = {
   id: 1, title: "親", description: "", projectId: 1, projectName: "案件", parentTaskId: null,
-  parentTaskTitle: null, assigneeId: null, assigneeName: null, status: "not_started", progress: 0,
+  parentTaskTitle: null, ownerUserId: null, ownerUserName: null, status: "not_started", progress: 0,
   countryCode: "JP", plannedStart: "2026-08-03", plannedEnd: "2026-08-14", businessDays: 9,
   actualStart: null, actualEnd: null, finalized: true,
 };

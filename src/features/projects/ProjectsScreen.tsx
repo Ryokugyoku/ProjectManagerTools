@@ -1,12 +1,12 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { createProject, deleteProject, updateProject, type Project, type ProjectInput, type ProjectPriority, type ProjectStatus } from "../../lib/projects";
-import type { Assignee } from "../../lib/wbs";
+import type { UserProfile } from "../../lib/wbs";
 
 const statusLabels: Record<ProjectStatus, string> = { planning: "計画中", active: "進行中", on_hold: "保留", completed: "完了" };
 const priorityLabels: Record<ProjectPriority, string> = { low: "低", medium: "中", high: "高" };
 const emptyProject: ProjectInput = { name: "", code: "", clientName: "", description: "", status: "planning", priority: "medium", plannedStart: null, plannedEnd: null, members: [] };
 
-export function ProjectsScreen({ projects, users, onChanged, onError }: { projects: Project[]; users: Assignee[]; onChanged: () => Promise<void>; onError: (value: string | null) => void }) {
+export function ProjectsScreen({ projects, users, onChanged, onError }: { projects: Project[]; users: UserProfile[]; onChanged: () => Promise<void>; onError: (value: string | null) => void }) {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [form, setForm] = useState<ProjectInput>(emptyProject);
   const [saving, setSaving] = useState(false);

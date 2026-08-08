@@ -5,14 +5,14 @@ import type { WbsTask } from "../../src/lib/wbs";
 
 // 因子: 案件（全件/指定/未設定）、責任者（全員/指定/未設定）、状態（全て/指定）。
 // 水準を直交的に組み合わせ、すべての有効なフィルターがAND条件として保たれることを確認する。
-const base: WbsTask = { id: 1, title: "設計", description: "", projectId: 1, projectName: "案件A", parentTaskId: null, parentTaskTitle: null, assigneeId: 2, assigneeName: "山田", status: "in_progress", progress: 30, countryCode: "JP", plannedStart: "2026-08-06", plannedEnd: "2026-08-07", businessDays: 2, actualStart: null, actualEnd: null, finalized: false };
-const tasks = [base, { ...base, id: 2, projectId: null, projectName: null }, { ...base, id: 3, assigneeId: null, assigneeName: null }, { ...base, id: 4, status: "completed" as const }];
+const base: WbsTask = { id: 1, title: "設計", description: "", projectId: 1, projectName: "案件A", parentTaskId: null, parentTaskTitle: null, ownerUserId: 2, ownerUserName: "山田", status: "in_progress", progress: 30, countryCode: "JP", plannedStart: "2026-08-06", plannedEnd: "2026-08-07", businessDays: 2, actualStart: null, actualEnd: null, finalized: false };
+const tasks = [base, { ...base, id: 2, projectId: null, projectName: null }, { ...base, id: 3, ownerUserId: null, ownerUserName: null }, { ...base, id: 4, status: "completed" as const }];
 const cases: Array<{ filters: WbsFilters; ids: number[] }> = [
-  { filters: { query: "", projectId: "all", assigneeId: "all", status: "all" }, ids: [1, 2, 3, 4] },
-  { filters: { query: "", projectId: 1, assigneeId: 2, status: "in_progress" }, ids: [1] },
-  { filters: { query: "", projectId: "unset", assigneeId: 2, status: "all" }, ids: [2] },
-  { filters: { query: "", projectId: 1, assigneeId: "unset", status: "all" }, ids: [3] },
-  { filters: { query: "", projectId: 1, assigneeId: 2, status: "completed" }, ids: [4] },
+  { filters: { query: "", projectId: "all", ownerUserId: "all", status: "all" }, ids: [1, 2, 3, 4] },
+  { filters: { query: "", projectId: 1, ownerUserId: 2, status: "in_progress" }, ids: [1] },
+  { filters: { query: "", projectId: "unset", ownerUserId: 2, status: "all" }, ids: [2] },
+  { filters: { query: "", projectId: 1, ownerUserId: "unset", status: "all" }, ids: [3] },
+  { filters: { query: "", projectId: 1, ownerUserId: 2, status: "completed" }, ids: [4] },
 ];
 
 describe("WBS filter combinations", () => {
@@ -50,7 +50,7 @@ describe("prerequisite task candidate combinations", () => {
   const child = { ...base, id: 9, title: "子", parentTaskId: 20, parentTaskTitle: "親" };
   const childSibling = { ...child, id: 10, title: "同じ親の子" };
   const otherProject = { ...base, id: 11, projectId: 2, projectName: "案件B" };
-  const cyclic = { ...base, id: 12, title: "循環候補", prerequisiteTaskId: 1 };
+  const cyclic = { ...base, id: 12, title: "循環候補", prerequisiteTaskIds: [1] };
   const candidates = [base, sibling, child, childSibling, otherProject, cyclic];
 
   it.each([

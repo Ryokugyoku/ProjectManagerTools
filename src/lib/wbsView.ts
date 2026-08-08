@@ -1,15 +1,15 @@
 import type { Project } from "./projects";
 import { addCalendarDays, parseISODate } from "./calendar";
 import type { Milestone } from "./milestones";
-import type { Assignee, WbsStatus, WbsTask } from "./wbs";
+import type { UserProfile, WbsStatus, WbsTask } from "./wbs";
 import { isTaskDelayed } from "./wbsPlanning";
 
-export type WbsGroupBy = "project" | "assignee";
+export type WbsGroupBy = "project" | "user";
 export type WbsFilterValue = "all" | "unset" | number;
 export type WbsFilters = {
   query: string;
   projectId: WbsFilterValue;
-  assigneeId: WbsFilterValue;
+  ownerUserId: WbsFilterValue;
   status: "all" | WbsStatus;
 };
 
@@ -65,12 +65,12 @@ export function buildTimelineMonths(dates: string[]): TimelineMonth[] {
 export function filterWbsTasks(tasks: WbsTask[], filters: WbsFilters): WbsTask[] {
   const query = filters.query.trim().toLocaleLowerCase("ja-JP");
   return tasks.filter((task) => {
-    const searchable = [task.title, task.description, task.projectName ?? "", task.assigneeName ?? ""]
+    const searchable = [task.title, task.description, task.projectName ?? "", task.ownerUserName ?? ""]
       .join(" ")
       .toLocaleLowerCase("ja-JP");
     return (!query || searchable.includes(query))
       && matchesId(task.projectId, filters.projectId)
-      && matchesId(task.assigneeId, filters.assigneeId)
+      && matchesId(task.ownerUserId, filters.ownerUserId)
       && (filters.status === "all" || task.status === filters.status);
   });
 }
@@ -82,7 +82,7 @@ export function summarizeWbsTasks(tasks: WbsTask[], today: string) {
     open: open.length,
     overdue: open.filter((task) => task.plannedEnd < today).length,
     delayed: open.filter((task) => isTaskDelayed(task, today)).length,
-    unassigned: tasks.filter((task) => task.projectId === null || task.assigneeId === null).length,
+    unassigned: tasks.filter((task) => task.projectId === null || task.ownerUserId === null).length,
     averageProgress: tasks.length
       ? Math.round(tasks.reduce((sum, task) => sum + task.progress, 0) / tasks.length)
       : 0,
@@ -93,7 +93,7 @@ export function buildWbsGroups(
   tasks: WbsTask[],
   groupBy: WbsGroupBy,
   projects: Project[],
-  assignees: Assignee[],
+  users: UserProfile[],
 ): WbsGroup[] {
   const definitions = groupBy === "project"
     ? projects.map((project) => ({
@@ -101,12 +101,12 @@ export function buildWbsGroups(
       label: project.name,
       detail: `${project.code} · ${project.members.length}人`,
     }))
-    : assignees.map((person) => ({
+    : users.map((person) => ({
       id: person.id,
       label: person.name,
       detail: person.role || person.department || "役割未設定",
     }));
-  const idFor = (task: WbsTask) => groupBy === "project" ? task.projectId : task.assigneeId;
+  const idFor = (task: WbsTask) => groupBy === "project" ? task.projectId : task.ownerUserId;
   const groups = definitions.map((definition) => ({
     key: `${groupBy}-${definition.id}`,
     label: definition.label,
@@ -184,7 +184,7 @@ export function prerequisiteTaskCandidates(tasks: WbsTask[], projectId: number |
 }
 
 function dependencyIds(task: WbsTask): number[] {
-  return task.prerequisiteTaskIds ?? (task.prerequisiteTaskId == null ? [] : [task.prerequisiteTaskId]);
+  return task.prerequisiteTaskIds ?? [];
 }
 
 export function ancestorTrail(tasks: WbsTask[], taskId: number): WbsTask[] {

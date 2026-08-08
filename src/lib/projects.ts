@@ -1,6 +1,6 @@
 import Database from "@tauri-apps/plugin-sql";
 
-const DATABASE_URL = "sqlite:project-manager.db";
+const DATABASE_URL = "sqlite:project-manager-v2.db";
 
 export type ProjectStatus = "planning" | "active" | "on_hold" | "completed";
 export type ProjectPriority = "low" | "medium" | "high";
@@ -37,7 +37,7 @@ export async function listProjects(): Promise<Project[]> {
     db.select<ProjectRow[]>(`SELECT id, name, code, client_name, description, status,
       priority, planned_start, planned_end FROM projects ORDER BY status, name COLLATE NOCASE`),
     db.select<MemberRow[]>(`SELECT pm.project_id, pm.user_id, a.name, a.email, pm.project_role
-      FROM project_members pm JOIN assignees a ON a.id=pm.user_id ORDER BY a.name COLLATE NOCASE`),
+      FROM project_members pm JOIN users a ON a.id=pm.user_id ORDER BY a.name COLLATE NOCASE`),
   ]);
   return projects.map((project) => ({
     id: project.id, name: project.name, code: project.code, clientName: project.client_name,
@@ -66,9 +66,9 @@ export async function updateProject(id: number, input: ProjectInput): Promise<vo
     description=$4, status=$5, priority=$6, planned_start=$7, planned_end=$8,
     updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id=$9`, [...projectValues(input), id]);
   await replaceMembers(db, id, input.members);
-  await db.execute(`UPDATE wbs_tasks SET assignee_id=NULL WHERE project_id=$1
-    AND assignee_id IS NOT NULL
-    AND assignee_id NOT IN (SELECT user_id FROM project_members WHERE project_id=$1)`, [id]);
+  await db.execute(`UPDATE wbs_tasks SET owner_user_id=NULL WHERE project_id=$1
+    AND owner_user_id IS NOT NULL
+    AND owner_user_id NOT IN (SELECT user_id FROM project_members WHERE project_id=$1)`, [id]);
 }
 
 export async function deleteProject(id: number): Promise<void> {

@@ -1,16 +1,16 @@
 import type { Project } from "../../lib/projects";
-import type { Assignee, UserLeave, WbsTask } from "../../lib/wbs";
+import type { UserProfile, UserLeave, WbsTask } from "../../lib/wbs";
 import { ancestorTrail, summarizeWbsTasks } from "../../lib/wbsView";
 import { formatISODate } from "../../lib/calendar";
 import { expectedProgress, isTaskDelayed } from "../../lib/wbsPlanning";
 import { pendingApprovalLabel, summarizeLeaveApprovals } from "../../lib/leaveApprovals";
 
-type Destination = "wbs" | "projects" | "users";
+type Destination = "wbs" | "projects" | "users" | "attendance";
 
 export function HomeScreen({ tasks, projects, users, leaves = [], countryCode = "JP", today = formatISODate(new Date()), loading, onNavigate, onOpenTask }: {
   tasks: WbsTask[];
   projects: Project[];
-  users: Assignee[];
+  users: UserProfile[];
   leaves?: UserLeave[];
   countryCode?: string;
   today?: string;
@@ -40,7 +40,7 @@ export function HomeScreen({ tasks, projects, users, leaves = [], countryCode = 
         <button onClick={() => onNavigate("wbs")}><span>未完了WBS</span><strong>{summary.open}</strong><small>平均進捗 {summary.averageProgress}%</small></button>
         <button className={summary.delayed > 0 ? "attention" : ""} onClick={() => onNavigate("wbs")}><span>進捗遅延</span><strong>{summary.delayed}</strong><small>{summary.delayed > 0 ? "計画進捗を下回っています" : "計画どおりに進行中"}</small></button>
       </section>
-      {leaveAttention.length > 0 && <section className="leave-attention-panel" aria-labelledby="leave-attention-heading"><div><p className="eyebrow">LEAVE APPROVALS</p><h2 id="leave-attention-heading">休暇の承認対応</h2><p>赤は本日中の対応、黄は承認待ちです。</p></div><div className="leave-attention-list">{leaveAttention.map(({ leave, approval }) => <button key={leave.id} className={approval.state} onClick={() => onNavigate("users")}><span>{approval.state === "urgent" ? "本日中" : "承認待ち"}</span><strong>{leave.userName}</strong><time>{leave.date}</time><small>{pendingApprovalLabel(approval.state === "urgent" ? approval.urgent : approval.pending)}</small></button>)}</div></section>}
+      {leaveAttention.length > 0 && <section className="leave-attention-panel" aria-labelledby="leave-attention-heading"><div><p className="eyebrow">LEAVE APPROVALS</p><h2 id="leave-attention-heading">休暇の承認対応</h2><p>赤は本日中の対応、黄は承認待ちです。</p></div><div className="leave-attention-list">{leaveAttention.map(({ leave, approval }) => <button key={leave.id} className={approval.state} onClick={() => onNavigate("attendance")}><span>{approval.state === "urgent" ? "本日中" : "承認待ち"}</span><strong>{leave.userName}</strong><time>{leave.date}</time><small>{pendingApprovalLabel(approval.state === "urgent" ? approval.urgent : approval.pending)}</small></button>)}</div></section>}
       <div className="home-content">
         <section className="home-panel attention-panel">
           <div className="home-panel-title"><div><p className="eyebrow">NEEDS ATTENTION</p><h2>確認が必要なWBS</h2></div><button onClick={() => onNavigate("wbs")}>すべて表示</button></div>

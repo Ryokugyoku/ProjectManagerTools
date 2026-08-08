@@ -1,6 +1,6 @@
 import Database from "@tauri-apps/plugin-sql";
 
-const DATABASE_URL = "sqlite:project-manager.db";
+const DATABASE_URL = "sqlite:project-manager-v2.db";
 
 export const MILESTONE_COLOR_OPTIONS = [
   { value: "forest", label: "フォレスト", solid: "#72c58e", tint: "rgba(76, 142, 96, .20)", edge: "#5daa76" },
