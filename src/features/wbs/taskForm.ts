@@ -1,5 +1,6 @@
 import type { WbsTaskInput } from "../../lib/wbs";
-import { addCalendarDays, isBusinessDay } from "../../lib/calendar";
+import { addCalendarDays, isBusinessDay, shiftBusinessDate } from "../../lib/calendar";
+import type { WbsStatus, WbsTask } from "../../lib/wbs";
 
 export type WbsTaskForm = Omit<WbsTaskInput, "businessDays"> & {
   businessDays: number | "";
@@ -16,6 +17,19 @@ export function businessDaysOrDefault(value: number | ""): number {
 export function requireDailyProgress(value: number | ""): number {
   if (value === "") throw new Error("その日に進んだ進捗を入力してください。");
   return value;
+}
+
+export function earliestPrerequisiteStart(tasks: WbsTask[], prerequisiteTaskIds: number[], countryCode: string): string | null {
+  const plannedEnds = prerequisiteTaskIds
+    .map((id) => tasks.find((task) => task.id === id)?.plannedEnd)
+    .filter((value): value is string => Boolean(value));
+  if (plannedEnds.length === 0) return null;
+  plannedEnds.sort();
+  return shiftBusinessDate(plannedEnds[plannedEnds.length - 1], 1, countryCode);
+}
+
+export function requiresEarlyStartReason(dailyProgress: number | "", prerequisites: Array<{ status: WbsStatus }>): boolean {
+  return dailyProgress !== "" && dailyProgress > 0 && prerequisites.some((task) => task.status !== "completed");
 }
 
 export function missingProgressDates(start: string, end: string, countryCode: string, recordedDates: string[]): string[] {

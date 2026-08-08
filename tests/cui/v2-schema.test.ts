@@ -6,14 +6,17 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const directory = mkdtempSync(join(tmpdir(), "project-manager-v2-"));
 const database = join(directory, "baseline.db");
-const migration = readFileSync(new URL("../../src-tauri/migrations/0001_v2_baseline.sql", import.meta.url), "utf8");
+const migrations = [
+  readFileSync(new URL("../../src-tauri/migrations/0001_v2_baseline.sql", import.meta.url), "utf8"),
+  readFileSync(new URL("../../src-tauri/migrations/0002_add_early_start_reason.sql", import.meta.url), "utf8"),
+].join("\n");
 
 function query(sql: string): string {
   return execFileSync("sqlite3", ["-readonly", database, sql], { encoding: "utf8" }).trim();
 }
 
 beforeAll(() => {
-  execFileSync("sqlite3", [database], { input: migration });
+  execFileSync("sqlite3", [database], { input: migrations });
 });
 
 afterAll(() => rmSync(directory, { recursive: true, force: true }));
@@ -31,5 +34,6 @@ describe("v2 SQLite baseline", () => {
     expect(query("SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name IN ('tasks','assignees','wbs_progress_logs','wbs_work_history');")).toBe("0");
     expect(query("SELECT COUNT(*) FROM pragma_table_info('wbs_tasks') WHERE name IN ('assignee_id','prerequisite_task_id');")).toBe("0");
     expect(query("SELECT COUNT(*) FROM pragma_table_info('wbs_tasks') WHERE name='owner_user_id';")).toBe("1");
+    expect(query("SELECT COUNT(*) FROM pragma_table_info('task_progress_entries') WHERE name='early_start_reason';")).toBe("1");
   });
 });

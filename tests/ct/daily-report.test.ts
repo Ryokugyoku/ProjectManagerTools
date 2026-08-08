@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildActiveTaskHierarchy, calculateDelayImpact, calculateProjectScheduleVariance, calculateTaskScheduleVariance } from "../../src/lib/dailyReport";
-import { missingProgressDates } from "../../src/features/wbs/taskForm";
+import { missingProgressDates, requiresEarlyStartReason } from "../../src/features/wbs/taskForm";
 import type { DailyProgressSnapshot, WbsTask } from "../../src/lib/wbs";
 
 // 因子: 実績進捗（前倒し/同率/遅延）、計画状態（確定/編集中）、階層（末端/親）。
@@ -77,5 +77,19 @@ describe("past progress date combinations", () => {
 
   it("returns no candidates for an inverted range", () => {
     expect(missingProgressDates("2026-08-08", "2026-08-07", "JP", [])).toEqual([]);
+  });
+});
+
+// 因子: 入力進捗（未入力/0/正数）、完了前提（なし/完了/未完了）。
+// 実際に作業を開始した正数入力かつ未完了前提がある組み合わせだけ理由を必須にする。
+describe("early start reason combinations", () => {
+  it.each([
+    ["", [{ status: "not_started" as const }], false],
+    [0, [{ status: "not_started" as const }], false],
+    [10, [], false],
+    [10, [{ status: "completed" as const }], false],
+    [10, [{ status: "completed" as const }, { status: "in_progress" as const }], true],
+  ])("progress %s and prerequisite states require reason: %s", (progress, prerequisites, expected) => {
+    expect(requiresEarlyStartReason(progress, prerequisites)).toBe(expected);
   });
 });

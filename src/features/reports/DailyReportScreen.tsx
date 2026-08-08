@@ -62,6 +62,7 @@ function WorkRecord({ task, snapshot, reportDate, tasks }: { task: WbsTask; snap
     {snapshot.latestHistoryDetails && <section className="latest-work-history"><div><b>最新の作業履歴</b>{snapshot.latestHistoryType && <span>{historyLabels[snapshot.latestHistoryType]}</span>}</div><p>{snapshot.latestHistoryDetails}</p></section>}
     {snapshot.rescheduleReason && <section className="report-reschedule-reason"><b>リスケ理由</b><p>{snapshot.rescheduleReason}</p></section>}
     {snapshot.delayReason && <section className="report-delay-reason"><b>遅延理由</b><p>{snapshot.delayReason}</p></section>}
+    {snapshot.earlyStartReason && <section className="report-early-start-reason"><b>前提完了前に開始した理由</b><p>{snapshot.earlyStartReason}</p></section>}
     {impact && <section className={`delay-impact ${impact.affectedTasks.length > 0 ? "has-impact" : "no-impact"}`}><b>後続タスクへの影響</b><p>{impact.successorTasks.length === 0 ? "影響なし：後続タスクは設定されていません。" : impact.affectedTasks.length > 0 ? `影響あり：${impact.affectedTasks.map((item) => `「${item.title}」`).join("、")}の開始予定に重なる見込みです。` : `現時点で影響なし：${impact.successorTasks.map((item) => `「${item.title}」`).join("、")}の開始予定までに収まる見込みです。`} 投影完了日 ${impact.projectedEnd}</p></section>}
     <section className="task-work-summary"><b>タスクの作業概要</b><p>{task.description || "作業の概要は未登録です。"}</p></section>
   </li>;

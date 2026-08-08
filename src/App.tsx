@@ -8,7 +8,7 @@ import {
 } from "./lib/wbs";
 import { buildScheduleCascade, buildScheduleCascadeForNewChild, expectedProgress, scheduleChangesRequireReason, type ScheduleChange, type TaskSchedule } from "./lib/wbsPlanning";
 import { TimelineBoard } from "./features/wbs/TimelineBoard";
-import { businessDaysOrDefault, missingProgressDates, parseBusinessDaysInput, requireDailyProgress, type WbsTaskForm } from "./features/wbs/taskForm";
+import { businessDaysOrDefault, earliestPrerequisiteStart, missingProgressDates, parseBusinessDaysInput, requireDailyProgress, requiresEarlyStartReason, type WbsTaskForm } from "./features/wbs/taskForm";
 import { WbsProjectSelector } from "./features/wbs/WbsProjectSelector";
 import { UsersScreen } from "./features/users/UsersScreen";
 import { AttendanceScreen } from "./features/attendance/AttendanceScreen";
@@ -433,15 +433,18 @@ function FormFields({ form, setForm, projects, users, tasks, currentTaskId, incl
     : users;
   const availableParents = parentTaskCandidates(tasks, form.projectId, currentTaskId);
   const availablePrerequisites = prerequisiteTaskCandidates(tasks, form.projectId, form.parentTaskId, currentTaskId);
+  const earliestStart = earliestPrerequisiteStart(tasks, form.prerequisiteTaskIds ?? [], form.countryCode);
+  const startsBeforePrerequisites = earliestStart !== null && form.plannedStart < earliestStart;
   return <div className="field-grid">
     <label className="wide">タスク名<input value={form.title} maxLength={120} required onChange={(e) => setForm({ ...form, title: e.currentTarget.value })} placeholder="例：要件定義レビュー" /></label>
     <label className="wide">作業の概要<textarea value={form.description} maxLength={1000} rows={3} onChange={(e) => setForm({ ...form, description: e.currentTarget.value })} placeholder="担当者が行う作業、完了条件、報告時に共有したい前提" /></label>
     <label>所属案件<select value={form.projectId ?? ""} onChange={(e) => { const projectId = e.currentTarget.value ? Number(e.currentTarget.value) : null; const project = projects.find((item) => item.id === projectId); const keepUserProfile = !project || project.members.some((member) => member.userId === form.ownerUserId); const keepParent = tasks.some((task) => task.id === form.parentTaskId && task.projectId === projectId); const parentTaskId = keepParent ? form.parentTaskId : null; const prerequisiteTaskIds = (form.prerequisiteTaskIds ?? []).filter((id) => tasks.some((task) => task.id === id && task.projectId === projectId && (task.parentTaskId ?? null) === parentTaskId)); setForm({ ...form, projectId, parentTaskId, prerequisiteTaskIds, ownerUserId: keepUserProfile ? form.ownerUserId : null }); }}><option value="">案件未設定</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
     <label>担当者<select value={form.ownerUserId ?? ""} onChange={(e) => setForm({ ...form, ownerUserId: e.currentTarget.value ? Number(e.currentTarget.value) : null })}><option value="">未設定</option>{availableUserProfiles.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select>{selectedProject && availableUserProfiles.length === 0 && <small>この案件にはユーザーが紐づいていません。</small>}</label>
     <label className="wide">親タスク<select value={form.parentTaskId ?? ""} onChange={(e) => { const parentTaskId = e.currentTarget.value ? Number(e.currentTarget.value) : null; const prerequisiteTaskIds = (form.prerequisiteTaskIds ?? []).filter((id) => tasks.some((task) => task.id === id && task.projectId === form.projectId && (task.parentTaskId ?? null) === parentTaskId)); setForm({ ...form, parentTaskId, prerequisiteTaskIds }); }}><option value="">親なし（最上位）</option>{availableParents.map((task) => <option key={task.id} value={task.id}>{task.parentTaskTitle ? `${task.parentTaskTitle} › ` : ""}{task.title}</option>)}</select><small>子タスクにも同じ操作で子を追加でき、階層を深くできます。</small></label>
-    <fieldset className="wide prerequisite-picker"><legend>完了が前提となるタスク（複数選択可）</legend>{availablePrerequisites.length === 0 ? <p>選択できる同階層タスクはありません。</p> : availablePrerequisites.map((task) => { const checked = (form.prerequisiteTaskIds ?? []).includes(task.id); return <label key={task.id}><input type="checkbox" checked={checked} onChange={() => { const prerequisiteTaskIds = checked ? (form.prerequisiteTaskIds ?? []).filter((id) => id !== task.id) : [...(form.prerequisiteTaskIds ?? []), task.id]; setForm({ ...form, prerequisiteTaskIds }); }} /><span><strong>{task.title}</strong><small>{task.plannedEnd} 完了予定</small></span></label>; })}<small>同じ案件・同じ親タスク配下から複数選択できます。循環する組み合わせは保存できません。</small></fieldset>
-    <label>開始予定日<input type="date" required disabled={scheduleLocked} value={form.plannedStart} onChange={(e) => setForm({ ...form, plannedStart: e.currentTarget.value })} /></label>
+    <fieldset className="wide prerequisite-picker"><legend>完了が前提となるタスク（複数選択可）</legend>{availablePrerequisites.length === 0 ? <p>選択できる同階層タスクはありません。</p> : availablePrerequisites.map((task) => { const checked = (form.prerequisiteTaskIds ?? []).includes(task.id); return <label key={task.id}><input type="checkbox" checked={checked} onChange={() => { const prerequisiteTaskIds = checked ? (form.prerequisiteTaskIds ?? []).filter((id) => id !== task.id) : [...(form.prerequisiteTaskIds ?? []), task.id]; const availableStart = earliestPrerequisiteStart(tasks, prerequisiteTaskIds, form.countryCode); setForm({ ...form, prerequisiteTaskIds, plannedStart: !scheduleLocked && availableStart ? availableStart : form.plannedStart }); }} /><span><strong>{task.title}</strong><small>{task.plannedEnd} 完了予定</small></span></label>; })}<small>同じ案件・同じ親タスク配下から複数選択できます。循環する組み合わせは保存できません。</small></fieldset>
+    <label>開始予定日<input type="date" required disabled={scheduleLocked} aria-describedby={startsBeforePrerequisites ? "prerequisite-start-warning" : undefined} aria-invalid={startsBeforePrerequisites ? "true" : undefined} value={form.plannedStart} onChange={(e) => setForm({ ...form, plannedStart: e.currentTarget.value })} /></label>
     <label>営業日数<input type="number" min="1" max="999" placeholder="1" value={form.businessDays} disabled={scheduleLocked} onChange={(e) => setForm({ ...form, businessDays: parseBusinessDaysInput(e.currentTarget.value) })} />{!includeActual && <small>未入力の場合は1営業日です。</small>}</label>
+    {startsBeforePrerequisites && <div id="prerequisite-start-warning" className="warning wide" role="alert"><strong>完了前提タスクの終了前です</strong><span>開始可能日は {earliestStart} です。前提タスクの完了前に開始する計画になっています。</span></div>}
     {includeActual && <>
       <label>状態<select value={form.status} onChange={(e) => setForm({ ...form, status: e.currentTarget.value as WbsStatus })}>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
       <span />
@@ -459,6 +462,7 @@ function ProgressModal({ task, pastOnly, reportDate, onClose, onSaved, onError }
   const [progressError, setProgressError] = useState<string | null>(null);
   const [note, setNote] = useState(pastOnly ? "" : task.todayProgressNote ?? "");
   const [delayReason, setDelayReason] = useState("");
+  const [earlyStartReason, setEarlyStartReason] = useState(pastOnly ? "" : task.todayEarlyStartReason ?? "");
   const [saving, setSaving] = useState(false);
   const [pastDates, setPastDates] = useState<string[] | null>(pastOnly ? null : []);
   const [selectedDate, setSelectedDate] = useState(pastOnly ? reportDate : today);
@@ -489,6 +493,8 @@ function ProgressModal({ task, pastOnly, reportDate, onClose, onSaved, onError }
   const currentTotal = pastOnly ? Math.min(100, task.progress + progressValue) : selectedTotal;
   const maxProgress = Math.max(0, 100 - baseProgress);
   const delayed = progress !== "" && task.finalized && selectedTotal < expected;
+  const incompletePrerequisites = (task.prerequisiteTasks ?? []).filter((item) => item.status !== "completed");
+  const earlyStart = requiresEarlyStartReason(progress, incompletePrerequisites);
   async function submit(event: FormEvent) {
     event.preventDefault();
     let dailyProgress: number;
@@ -500,7 +506,7 @@ function ProgressModal({ task, pastOnly, reportDate, onClose, onSaved, onError }
       return;
     }
     setSaving(true);
-    try { await saveDailyProgress(task.id, selectedDate, dailyProgress, note, delayReason); await onSaved(); }
+    try { await saveDailyProgress(task.id, selectedDate, dailyProgress, note, delayReason, earlyStartReason); await onSaved(); }
     catch (cause) { onError(toMessage(cause)); setSaving(false); }
   }
   const editing = !pastOnly && task.todayDailyProgress != null;
@@ -513,7 +519,8 @@ function ProgressModal({ task, pastOnly, reportDate, onClose, onSaved, onError }
       {progressError && <div id="daily-progress-error" className="error" role="alert"><span>{progressError}</span></div>}
       <label>{pastOnly ? "その日のメモ" : "今日のメモ"}<textarea rows={4} maxLength={500} value={note} onChange={(e) => setNote(e.currentTarget.value)} placeholder="進んだこと、困っていること" /></label>
       {delayed && <label className="delay-reason">計画を下回る理由<span>必須</span><textarea required rows={3} maxLength={1000} value={delayReason} onChange={(e) => setDelayReason(e.currentTarget.value)} placeholder="遅延の要因と対応方針を記載してください" /></label>}
-      <div className="modal-actions"><button type="button" className="quiet-button" onClick={onClose}>キャンセル</button><button className="primary-button" disabled={saving || !selectedDate || (delayed && !delayReason.trim())}>{saving ? "保存中…" : editing ? "更新する" : "記録する"}</button></div>
+      {earlyStart && <label className="early-start-reason">前提タスクの完了前に開始した理由<span>必須</span><small>未完了：{incompletePrerequisites.map((item) => item.title).join("、")}</small><textarea required rows={3} maxLength={1000} value={earlyStartReason} onChange={(e) => setEarlyStartReason(e.currentTarget.value)} placeholder="待たずに開始した判断、影響、対応を記載してください" /></label>}
+      <div className="modal-actions"><button type="button" className="quiet-button" onClick={onClose}>キャンセル</button><button className="primary-button" disabled={saving || !selectedDate || (delayed && !delayReason.trim()) || (earlyStart && !earlyStartReason.trim())}>{saving ? "保存中…" : editing ? "更新する" : "記録する"}</button></div>
     </form>
   </Modal>;
 }

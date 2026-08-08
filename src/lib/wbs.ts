@@ -43,7 +43,7 @@ export type WbsTask = {
   parentTaskId: number | null;
   parentTaskTitle: string | null;
   prerequisiteTaskIds?: number[];
-  prerequisiteTasks?: Array<{ id: number; title: string }>;
+  prerequisiteTasks?: Array<{ id: number; title: string; status: WbsStatus }>;
   ownerUserId: number | null;
   ownerUserName: string | null;
   status: WbsStatus;
@@ -57,10 +57,11 @@ export type WbsTask = {
   finalized: boolean;
   todayDailyProgress?: number | null;
   todayProgressNote?: string;
+  todayEarlyStartReason?: string;
   latestDelayReason?: string;
   ownerLeaves?: UserLeave[];
 };
-export type WbsTaskInput = Omit<WbsTask, "id" | "ownerUserName" | "projectName" | "parentTaskTitle" | "prerequisiteTasks" | "plannedEnd" | "finalized" | "todayDailyProgress" | "todayProgressNote" | "latestDelayReason"> & {
+export type WbsTaskInput = Omit<WbsTask, "id" | "ownerUserName" | "projectName" | "parentTaskTitle" | "prerequisiteTasks" | "plannedEnd" | "finalized" | "todayDailyProgress" | "todayProgressNote" | "todayEarlyStartReason" | "latestDelayReason"> & {
   plannedEnd: string;
 };
 export type AppSettings = {
@@ -83,6 +84,7 @@ export type DailyProgressSnapshot = {
   latestHistoryDetails: string;
   rescheduleReason: string;
   delayReason: string;
+  earlyStartReason?: string;
 };
 
 type WbsTaskRow = {
@@ -95,9 +97,10 @@ type WbsTaskRow = {
   finalized: number;
   today_daily_progress: number | null;
   today_progress_note: string | null;
+  today_early_start_reason: string | null;
   latest_delay_reason: string | null;
 };
-type WbsDependencyRow = { task_id: number; prerequisite_task_id: number; prerequisite_task_title: string };
+type WbsDependencyRow = { task_id: number; prerequisite_task_id: number; prerequisite_task_title: string; prerequisite_task_status: WbsStatus };
 type ActivityEventRow = { id: number; task_id: number; event_kind: ActivityEventKind; reason: string; details: string; occurred_at: string };
 type TaskTreeHistoryRow = ActivityEventRow & { task_title: string; depth: number };
 type UserRow = {
@@ -132,6 +135,7 @@ export async function listWbsTasks(date = localISODate()): Promise<WbsTask[]> {
       w.business_days, w.actual_start, w.actual_end, w.finalized,
       today_log.daily_progress AS today_daily_progress,
       today_log.note AS today_progress_note,
+      today_log.early_start_reason AS today_early_start_reason,
       (SELECT history.reason FROM task_activity_events history
         WHERE history.task_id=w.id AND history.event_kind='delay'
         ORDER BY history.occurred_at DESC, history.id DESC LIMIT 1) AS latest_delay_reason
@@ -144,7 +148,8 @@ export async function listWbsTasks(date = localISODate()): Promise<WbsTask[]> {
   `, [date]);
   const dependencies = await db.select<WbsDependencyRow[]>(`
     SELECT dependency.task_id, dependency.prerequisite_task_id,
-      prerequisite.title AS prerequisite_task_title
+      prerequisite.title AS prerequisite_task_title,
+      prerequisite.status AS prerequisite_task_status
     FROM wbs_task_dependencies dependency
     JOIN wbs_tasks prerequisite ON prerequisite.id=dependency.prerequisite_task_id
     ORDER BY dependency.task_id, prerequisite.planned_start, prerequisite.id
@@ -156,10 +161,11 @@ export async function listWbsTasks(date = localISODate()): Promise<WbsTask[]> {
     ORDER BY leave.leave_date, leave.id`) ?? [];
   const leavesByUser = new Map<number, UserLeave[]>();
   for (const row of leaveRows) leavesByUser.set(row.user_id, [...(leavesByUser.get(row.user_id) ?? []), mapUserLeave(row)]);
-  const byTask = new Map<number, Array<{ id: number; title: string }>>();
+  const byTask = new Map<number, Array<{ id: number; title: string; status: WbsStatus }>>();
   for (const dependency of dependencies) {
     byTask.set(dependency.task_id, [...(byTask.get(dependency.task_id) ?? []), {
       id: dependency.prerequisite_task_id, title: dependency.prerequisite_task_title,
+      status: dependency.prerequisite_task_status,
     }]);
   }
   return deriveParentProgress(rows.map((row) => {
@@ -174,9 +180,9 @@ export async function listDailyProgressSnapshots(date: string): Promise<DailyPro
   const rows = await db.select<Array<{
     task_id: number; daily_progress: number | null; cumulative_progress: number; note: string | null;
     latest_history_type: ActivityEventKind | null; latest_history_details: string | null;
-    reschedule_reason: string | null; delay_reason: string | null;
+    reschedule_reason: string | null; delay_reason: string | null; early_start_reason: string | null;
   }>>(`
-    SELECT w.id AS task_id, exact_log.daily_progress, exact_log.note,
+    SELECT w.id AS task_id, exact_log.daily_progress, exact_log.note, exact_log.early_start_reason,
       COALESCE(
         (SELECT previous.cumulative_progress FROM task_progress_entries previous
           WHERE previous.task_id=w.id AND previous.entry_date<=$1
@@ -214,6 +220,7 @@ export async function listDailyProgressSnapshots(date: string): Promise<DailyPro
     latestHistoryDetails: row.latest_history_details ?? "",
     rescheduleReason: row.reschedule_reason ?? "",
     delayReason: row.delay_reason ?? "",
+    earlyStartReason: row.early_start_reason ?? "",
   }));
 }
 
@@ -300,7 +307,7 @@ export async function saveScheduleChanges(changes: Array<{ taskId: number; plann
   }
 }
 
-export async function saveDailyProgress(taskId: number, date: string, dailyProgress: number, note: string, delayReason: string) {
+export async function saveDailyProgress(taskId: number, date: string, dailyProgress: number, note: string, delayReason: string, earlyStartReason = "") {
   if (!Number.isFinite(dailyProgress) || dailyProgress < 0 || dailyProgress > 100) throw new Error("その日に進んだ進捗は0〜100%で入力してください。");
   const db = await database();
   const rows = await db.select<Array<{ progress: number; finalized: number; planned_start: string; planned_end: string; business_days: number; country_code: string; owner_user_id: number | null; previous_daily: number; child_count: number }>>(
@@ -334,14 +341,25 @@ export async function saveDailyProgress(taskId: number, date: string, dailyProgr
   const totalProgress = recalculated[recalculated.length - 1].progress;
   const expected = expectedProgress({ plannedStart: task.planned_start, plannedEnd: task.planned_end, businessDays: task.business_days, countryCode: task.country_code, ownerLeaves: leaveRows.map(mapUserLeave) }, date);
   const normalizedReason = delayReason.trim();
+  const normalizedEarlyStartReason = earlyStartReason.trim();
+  const incompletePrerequisites = await db.select<Array<{ title: string }>>(`
+    SELECT prerequisite.title
+    FROM wbs_task_dependencies dependency
+    JOIN wbs_tasks prerequisite ON prerequisite.id=dependency.prerequisite_task_id
+    WHERE dependency.task_id=$1 AND prerequisite.status<>'completed'
+    ORDER BY prerequisite.planned_end, prerequisite.id
+  `, [taskId]) ?? [];
   if (task.finalized === 1 && selectedProgress < expected && !normalizedReason) throw new Error("計画進捗を下回る理由を入力してください。");
+  if (dailyProgress > 0 && incompletePrerequisites.length > 0 && !normalizedEarlyStartReason) {
+    throw new Error("完了前提タスクの完了前に開始した理由を入力してください。");
+  }
   await db.execute(`
-    INSERT INTO task_progress_entries (task_id, entry_date, cumulative_progress, note, daily_progress)
-    VALUES ($1, $2, $3, $4, $5)
+    INSERT INTO task_progress_entries (task_id, entry_date, cumulative_progress, note, daily_progress, early_start_reason)
+    VALUES ($1, $2, $3, $4, $5, $6)
     ON CONFLICT(task_id, entry_date) DO UPDATE SET cumulative_progress=excluded.cumulative_progress,
-      note=excluded.note, daily_progress=excluded.daily_progress,
+      note=excluded.note, daily_progress=excluded.daily_progress, early_start_reason=excluded.early_start_reason,
       updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-  `, [taskId, date, selectedProgress, note.trim(), dailyProgress]);
+  `, [taskId, date, selectedProgress, note.trim(), dailyProgress, dailyProgress > 0 ? normalizedEarlyStartReason : ""]);
   for (const log of recalculated.filter((log) => log.logDate > date)) {
     await db.execute("UPDATE task_progress_entries SET cumulative_progress=$1, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE task_id=$2 AND entry_date=$3", [log.progress, taskId, log.logDate]);
   }
@@ -477,7 +495,7 @@ export async function saveSettings(settings: AppSettings): Promise<void> {
   ]);
 }
 
-function mapTask(row: WbsTaskRow, dependencies: Array<{ id: number; title: string }>): WbsTask {
+function mapTask(row: WbsTaskRow, dependencies: Array<{ id: number; title: string; status: WbsStatus }>): WbsTask {
   return {
     id: row.id, title: row.title, description: row.description,
     projectId: row.project_id, projectName: row.project_name,
@@ -489,6 +507,7 @@ function mapTask(row: WbsTaskRow, dependencies: Array<{ id: number; title: strin
     actualStart: row.actual_start, actualEnd: row.actual_end, finalized: row.finalized === 1,
     todayDailyProgress: row.today_daily_progress,
     todayProgressNote: row.today_progress_note ?? "",
+    todayEarlyStartReason: row.today_early_start_reason ?? "",
     latestDelayReason: row.latest_delay_reason ?? "",
   };
 }
