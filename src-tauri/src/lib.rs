@@ -71,6 +71,18 @@ pub fn run() {
             sql: include_str!("../migrations/0011_create_wbs_task_dependencies.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 12,
+            description: "add_daily_report_ancestor_depth",
+            sql: include_str!("../migrations/0012_add_daily_report_ancestor_depth.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 13,
+            description: "create_user_leaves",
+            sql: include_str!("../migrations/0013_create_user_leaves.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()

@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { DailyReportScreen } from "../../src/features/reports/DailyReportScreen";
-import { buildDailyProjectReports, previousBusinessDate } from "../../src/lib/dailyReport";
+import { buildActiveTaskHierarchy, buildDailyProjectReports, previousBusinessDate } from "../../src/lib/dailyReport";
 import type { Project } from "../../src/lib/projects";
 import type { DailyProgressSnapshot, WbsTask } from "../../src/lib/wbs";
 
@@ -17,11 +17,21 @@ describe("daily project report", () => {
     expect(previousBusinessDate("2026-08-10", "JP")).toBe("2026-08-07");
   });
 
-  it("groups work by person and retains every ancestor for active tasks", () => {
+  it("groups work by person and merges shared active-task ancestry", () => {
     const [report] = buildDailyProjectReports([project], [root, child, grandchild], [snapshot], "2026-08-07");
     expect(report.people[0]).toMatchObject({ name: "山田" });
     expect(report.people[0].records[0].snapshot.note).toContain("レビュー");
-    expect(report.activeTaskChains.find((chain) => chain.at(-1)?.id === 3)?.map((task) => task.title)).toEqual(["設計", "API設計", "認証API"]);
+    expect(report.activeTaskCount).toBe(3);
+    expect(report.activeTaskHierarchy).toHaveLength(1);
+    expect(report.activeTaskHierarchy[0].children[0].children[0].task.title).toBe("認証API");
+  });
+
+  it("limits ancestors and reports how many higher levels were omitted", () => {
+    const level4 = { ...grandchild, id: 4, title: "トークン設計", parentTaskId: 3, parentTaskTitle: "認証API" };
+    const hierarchy = buildActiveTaskHierarchy([root, child, grandchild, level4].map((task, index) => ({ ...task, status: index === 3 ? "in_progress" as const : "not_started" as const })), 2);
+    expect(hierarchy[0].task.title).toBe("API設計");
+    expect(hierarchy[0].omittedAncestorCount).toBe(1);
+    expect(hierarchy[0].children[0].children[0].task.title).toBe("トークン設計");
   });
 
   it("includes a latest history report even when no daily progress was entered", () => {
@@ -30,8 +40,21 @@ describe("daily project report", () => {
     expect(report.people[0].records[0].snapshot.latestHistoryDetails).toBe("日程を見直しました");
   });
 
+  it("links an empty previous-day report back to WBS input", () => {
+    const markup = renderToStaticMarkup(<DailyReportScreen projects={[project]} tasks={[]} snapshots={[]} reportDate="2026-08-07" loading={false} ancestorDepth={3} onOpenWbs={() => undefined} />);
+    expect(markup).toContain("WBSで過去の進捗を入力");
+    expect(markup).toContain("未入力の日付");
+  });
+
+  it("warns about missing leaf progress even when other report content exists", () => {
+    const missing = { ...grandchild, id: 8, title: "未入力タスク", status: "not_started" as const };
+    const markup = renderToStaticMarkup(<DailyReportScreen projects={[project]} tasks={[root, child, grandchild, missing]} snapshots={[snapshot]} reportDate="2026-08-07" loading={false} ancestorDepth={3} onOpenWbs={() => undefined} />);
+    expect(markup).toContain("前日の進捗が未入力のWBSがあります");
+    expect(markup).toContain("1件の末端タスク");
+  });
+
   it("renders a meeting-ready project summary, work note, and hierarchy summaries", () => {
-    const markup = renderToStaticMarkup(<DailyReportScreen projects={[project]} tasks={[root, child, grandchild]} snapshots={[snapshot]} reportDate="2026-08-07" loading={false} />);
+    const markup = renderToStaticMarkup(<DailyReportScreen projects={[project]} tasks={[root, child, grandchild]} snapshots={[snapshot]} reportDate="2026-08-07" loading={false} ancestorDepth={3} onOpenWbs={() => undefined} />);
     expect(markup).toContain("案件全体進捗");
     expect(markup).toContain("認証方式をレビューしました");
     expect(markup).toContain("最新の作業履歴");
@@ -44,6 +67,7 @@ describe("daily project report", () => {
     expect(markup).toContain("全体設計");
     expect(markup).toContain("API仕様を確定する");
     expect(markup).toContain("認証方式を整理する");
+    expect(markup.match(/全体設計/g)).toHaveLength(1);
   });
 
   it("warns when project progress is on schedule but an individual task is delayed", () => {
@@ -51,14 +75,14 @@ describe("daily project report", () => {
     const ahead = { ...root, id: 22, title: "前倒し作業", businessDays: 10 };
     const delayedSnapshot = { ...snapshot, taskId: 21, cumulativeProgress: 40, rescheduleReason: "", delayReason: "確認待ち" };
     const aheadSnapshot = { ...snapshot, taskId: 22, cumulativeProgress: 60, rescheduleReason: "", delayReason: "" };
-    const markup = renderToStaticMarkup(<DailyReportScreen projects={[project]} tasks={[delayed, ahead]} snapshots={[delayedSnapshot, aheadSnapshot]} reportDate="2026-08-07" loading={false} />);
+    const markup = renderToStaticMarkup(<DailyReportScreen projects={[project]} tasks={[delayed, ahead]} snapshots={[delayedSnapshot, aheadSnapshot]} reportDate="2026-08-07" loading={false} ancestorDepth={3} onOpenWbs={() => undefined} />);
     expect(markup).toContain("計画どおり・個別遅延1件");
     expect(markup).toContain('variance warning');
   });
 
   it("names successor tasks when a delayed prerequisite reaches their planned start", () => {
     const successor = { ...grandchild, id: 30, title: "結合テスト", prerequisiteTaskId: 3, plannedStart: "2026-08-14" };
-    const markup = renderToStaticMarkup(<DailyReportScreen projects={[project]} tasks={[root, child, grandchild, successor]} snapshots={[snapshot]} reportDate="2026-08-07" loading={false} />);
+    const markup = renderToStaticMarkup(<DailyReportScreen projects={[project]} tasks={[root, child, grandchild, successor]} snapshots={[snapshot]} reportDate="2026-08-07" loading={false} ancestorDepth={3} onOpenWbs={() => undefined} />);
     expect(markup).toContain("影響あり");
     expect(markup).toContain("「結合テスト」の開始予定に重なる見込み");
   });

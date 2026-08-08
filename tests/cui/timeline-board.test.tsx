@@ -83,6 +83,22 @@ describe("WBSロードマップの選択表示", () => {
     expect(markup).toContain('roadmap-row  parent-task');
     expect(markup).toContain('timeline-bar in_progress untracked has-children');
   });
+
+  it("担当者の午前半休と午後半休を日付セルの左右で示す", () => {
+    const withLeaves = { ...task, assigneeId: 2, assigneeName: "山田", assigneeLeaves: [
+      { id: 1, userId: 2, userName: "山田", date: "2026-08-07", type: "planned" as const, unit: "morning" as const, reason: "" },
+      { id: 2, userId: 2, userName: "山田", date: "2026-08-08", type: "unplanned" as const, unit: "afternoon" as const, reason: "体調不良" },
+    ] };
+    const markup = renderToStaticMarkup(<TimelineBoard {...{
+      tasks: [withLeaves], milestones: [], assignees: [], projects: [], groupBy: "project" as const,
+      countryCode: "JP", selectedId: null, onSelect: vi.fn(), onCreateSubtask: vi.fn(), onShowHistory: vi.fn(),
+      onRecordProgress: vi.fn(), onSelectMilestone: vi.fn(), onScheduleChange: vi.fn(),
+    }} />);
+    expect(markup).toContain("task-leave-marker morning");
+    expect(markup).toContain("task-leave-marker afternoon");
+    expect(markup).toContain("午前半休");
+    expect(markup).toContain("午後半休");
+  });
 });
 
 describe("ホームの遅延表示", () => {

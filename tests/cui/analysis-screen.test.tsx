@@ -37,4 +37,12 @@ describe("analysis screen", () => {
     expect(markup).toContain("内部のダイアグラムを表示");
     expect(markup).not.toContain("画面設計");
   });
+
+  it("continues an ahead state through unfinished successor paths in blue", () => {
+    const ahead = { ...base, id: 20, title: "前倒し起点", progress: 80, plannedStart: "2026-08-10", plannedEnd: "2026-08-21", businessDays: 10 };
+    const successor = { ...base, id: 21, title: "後続工程", progress: 0, plannedStart: "2026-08-24", plannedEnd: "2026-08-28", prerequisiteTaskIds: [20], latestDelayReason: "" };
+    const markup = renderToStaticMarkup(<AnalysisScreen projects={[project]} tasks={[ahead, successor]} today="2026-08-08" loading={false} />);
+    expect(markup).toContain("ahead-impact-edge");
+    expect(markup).toContain("前倒し影響");
+  });
 });

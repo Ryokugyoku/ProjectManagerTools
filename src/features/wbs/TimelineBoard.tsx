@@ -6,7 +6,7 @@ import {
 import type { Project } from "../../lib/projects";
 import { milestoneColorTokens, type Milestone } from "../../lib/milestones";
 import type { Assignee, WbsTask } from "../../lib/wbs";
-import { expectedProgress, progressHealth } from "../../lib/wbsPlanning";
+import { currentDayCheckpoint, expectedProgress, progressHealth } from "../../lib/wbsPlanning";
 import { buildTimelineDateRange, buildTimelineMonths, buildWbsGroups, dailyProgressActionLabel, flattenWbsTaskTree, type WbsGroupBy } from "../../lib/wbsView";
 
 const DAY_WIDTH = 42;
@@ -24,7 +24,7 @@ type DragSession = {
 };
 type ContextMenuState = { task: WbsTask; x: number; y: number };
 
-export function TimelineBoard({ tasks, allTasks = tasks, milestones, assignees, projects, groupBy, countryCode, selectedId, onSelect, onCreateSubtask, onShowHistory, onRecordProgress, onSelectMilestone, onScheduleChange }: {
+export function TimelineBoard({ tasks, allTasks = tasks, milestones, assignees, projects, groupBy, countryCode, selectedId, pastMissingTaskIds = new Set(), onSelect, onCreateSubtask, onShowHistory, onRecordProgress, onSelectMilestone, onScheduleChange }: {
   tasks: WbsTask[];
   allTasks?: WbsTask[];
   milestones: Milestone[];
@@ -33,6 +33,7 @@ export function TimelineBoard({ tasks, allTasks = tasks, milestones, assignees, 
   groupBy: WbsGroupBy;
   countryCode: string;
   selectedId: number | null;
+  pastMissingTaskIds?: Set<number>;
   onSelect: (task: WbsTask) => void;
   onCreateSubtask: (task: WbsTask) => void;
   onShowHistory: (task: WbsTask) => void;
@@ -256,7 +257,7 @@ export function TimelineBoard({ tasks, allTasks = tasks, milestones, assignees, 
             const width = Math.max(DAY_WIDTH, (dayDifference(task.plannedStart, task.plannedEnd) + 1) * DAY_WIDTH);
             const selected = selectedId === task.id;
             const hasChildren = allTasks.some((candidate) => candidate.parentTaskId === task.id);
-            const plannedProgress = expectedProgress(task, today);
+            const plannedProgress = expectedProgress(task, today, currentDayCheckpoint());
             const health = progressHealth(task, today);
             return <div className={`roadmap-row ${selected ? "selected" : ""} ${hasChildren ? "parent-task" : ""}`} key={task.id} onContextMenu={(event) => openContextMenu(event, task)} onKeyDown={(event) => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) openContextMenu(event, task); }}>
               <button className="task-info" style={{ "--task-depth": depth } as React.CSSProperties} aria-pressed={selected} onClick={() => onSelect(task)}>
@@ -266,6 +267,7 @@ export function TimelineBoard({ tasks, allTasks = tasks, milestones, assignees, 
               <span className={`status-cell ${task.status}`}>{statusLabel(task.status)}</span>
               <span className={`progress-cell ${health}`} title={`${hasChildren ? "子タスクから自動集計" : "実績"} ${task.progress}% / 今日の予定 ${plannedProgress}%`}><strong>{task.progress}%</strong><small>{hasChildren ? "子から集計" : `予定 ${plannedProgress}%`}</small></span>
               <div className="timeline-cells" style={{ backgroundImage: timelineBackground }}>
+                {(task.assigneeLeaves ?? []).filter((leave) => leave.date >= range.start && leave.date <= range.end).map((leave) => <span key={leave.id} className={`task-leave-marker ${leave.unit}`} style={{ left: dayDifference(range.start, leave.date) * DAY_WIDTH }} title={`${task.assigneeName ?? "担当者"}：${leave.date} ${leaveUnitLabel(leave.unit)}（${leave.type === "planned" ? "計画休" : "計画外"}）${leave.reason ? ` ${leave.reason}` : ""}`} aria-label={`${task.assigneeName ?? "担当者"}は${leave.date}に${leaveUnitLabel(leave.unit)}`}><i aria-hidden="true">{leave.unit === "full_day" ? "休" : leave.unit === "morning" ? "午" : "後"}</i></span>)}
                 <div className={`timeline-bar ${task.status} ${health} ${hasChildren ? "has-children" : ""}`} style={{ left, width }}>
                   <button className="resize-handle left" aria-label={`${task.title}の営業日数を1日減らす。ドラッグで開始側を調整`} onPointerDown={(event) => begin(event, task, "left")} onClick={() => void clickDuration(task, -1)} onKeyDown={(event) => void keyboardAdjust(event, task, "left")}>−</button>
                   <button className="bar-body" title={`実績 ${task.progress}% / 今日の予定 ${plannedProgress}%（点線）`} onPointerDown={(event) => begin(event, task, "move")} onKeyDown={(event) => void keyboardAdjust(event, task, "move")}><i className="actual-progress" style={{ width: `${task.progress}%` }} /><i className="planned-progress" style={{ left: `${plannedProgress}%` }} /><span>{task.title} · {task.progress}%</span></button>
@@ -279,7 +281,7 @@ export function TimelineBoard({ tasks, allTasks = tasks, milestones, assignees, 
     </div>
     <div className="roadmap-help"><strong>横にスクロールして期間を確認</strong><span>中央をドラッグ：開始日を移動</span><span>左右端をドラッグ：営業日数を変更</span><span>← → キーでも調整可能</span></div>
     {contextMenu && <div className="task-context-menu" ref={contextMenuRef} role="menu" aria-label={`${contextMenu.task.title}の操作`} style={{ left: contextMenu.x, top: contextMenu.y }}>
-      {dailyProgressActionLabel(contextMenu.task, allTasks.some((candidate) => candidate.parentTaskId === contextMenu.task.id)) && <button role="menuitem" onClick={() => { const task = contextMenu.task; setContextMenu(null); onRecordProgress(task); }}>{dailyProgressActionLabel(contextMenu.task, false)}</button>}
+      {dailyProgressActionLabel(contextMenu.task, allTasks.some((candidate) => candidate.parentTaskId === contextMenu.task.id), pastMissingTaskIds.has(contextMenu.task.id)) && <button role="menuitem" onClick={() => { const task = contextMenu.task; setContextMenu(null); onRecordProgress(task); }}>{dailyProgressActionLabel(contextMenu.task, false, pastMissingTaskIds.has(contextMenu.task.id))}</button>}
       <button role="menuitem" onClick={() => { const task = contextMenu.task; setContextMenu(null); onShowHistory(task); }}>作業経緯を表示</button>
       <button role="menuitem" onClick={() => { const task = contextMenu.task; setContextMenu(null); onCreateSubtask(task); }}>＋ サブタスクを追加</button>
     </div>}
@@ -304,6 +306,7 @@ function DayColumn({ date, countryCode, milestones = [], header = false, onSelec
 
 function dayDifference(from: string, to: string) { return Math.round((parseISODate(to).getTime() - parseISODate(from).getTime()) / 86_400_000); }
 function statusLabel(status: WbsTask["status"]) { return { not_started: "未着手", in_progress: "進行中", completed: "完了", on_hold: "保留" }[status]; }
+function leaveUnitLabel(unit: "full_day" | "morning" | "afternoon") { return { full_day: "全休", morning: "午前半休", afternoon: "午後半休" }[unit]; }
 function formatMilestoneDate(value: string) { return new Intl.DateTimeFormat("ja-JP", { year: "numeric", month: "short", day: "numeric" }).format(parseISODate(value)); }
 
 function buildTimelineBackground(dates: string[], countryCode: string, milestonesByDate: Map<string, Milestone[]>, today: string) {

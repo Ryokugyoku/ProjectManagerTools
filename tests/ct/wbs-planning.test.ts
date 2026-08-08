@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { WbsTask } from "../../src/lib/wbs";
-import { deriveParentProgress, isTaskDelayed } from "../../src/lib/wbsPlanning";
+import { availableWorkdays, deriveParentProgress, expectedProgress, isTaskDelayed } from "../../src/lib/wbsPlanning";
 
 const base: WbsTask = {
   id: 1, title: "実装", description: "", projectId: 1, projectName: "案件", parentTaskId: null,
@@ -20,6 +20,26 @@ describe("planned progress delay combinations", () => {
     [true, "2026-08-14", 20, "completed", false],
   ] as const)("finalized=%s date=%s progress=%s status=%s", (finalized, date, progress, status, delayed) => {
     expect(isTaskDelayed({ ...base, finalized, progress, status }, date)).toBe(delayed);
+  });
+});
+
+describe("休暇を含む計画進捗の組み合わせ", () => {
+  // 因子: 取得単位（全休/午前半休/午後半休）、評価時点（午前終了/日終了）。
+  // 期日は固定し、休暇分を残りの稼働可能時間へ再配分する。
+  const plan = { ...base, plannedStart: "2026-08-03", plannedEnd: "2026-08-05", businessDays: 3 };
+
+  it("3営業日のうち1日全休なら、稼働可能な2日へ50%ずつ配分する", () => {
+    const assigneeLeaves = [{ id: 1, userId: 2, userName: "山田", date: "2026-08-04", type: "planned" as const, unit: "full_day" as const, reason: "" }];
+    expect(availableWorkdays(plan.plannedStart, plan.plannedEnd, plan.countryCode, assigneeLeaves)).toBe(2);
+    expect(expectedProgress({ ...plan, assigneeLeaves }, "2026-08-03")).toBe(50);
+    expect(expectedProgress({ ...plan, assigneeLeaves }, "2026-08-04")).toBe(50);
+    expect(expectedProgress({ ...plan, assigneeLeaves }, "2026-08-05")).toBe(100);
+  });
+
+  it("午前終了時は、午前半休と午後半休で期待進捗を分ける", () => {
+    const leave = { id: 1, userId: 2, userName: "山田", date: "2026-08-04", type: "planned" as const, reason: "" };
+    expect(expectedProgress({ ...plan, assigneeLeaves: [{ ...leave, unit: "morning" }] }, "2026-08-04", "morning")).toBe(40);
+    expect(expectedProgress({ ...plan, assigneeLeaves: [{ ...leave, unit: "afternoon" }] }, "2026-08-04", "morning")).toBe(60);
   });
 });
 

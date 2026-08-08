@@ -4,8 +4,8 @@ const db = vi.hoisted(() => ({ select: vi.fn(), execute: vi.fn() }));
 vi.mock("@tauri-apps/plugin-sql", () => ({ default: { load: vi.fn(async () => db) } }));
 
 import {
-  createAssignee, createWbsTask, deleteAssignee, deleteWbsTask, getSettings,
-  finalizeWbsTask, listAssignees, listDailyProgressSnapshots, listTaskHistory, listTaskTreeHistory, listWbsTasks, saveDailyProgress, saveScheduleChanges, saveSettings, updateAssignee,
+  createAssignee, createUserLeave, createWbsTask, deleteAssignee, deleteUserLeave, deleteWbsTask, getSettings,
+  finalizeWbsTask, listAssignees, listDailyProgressSnapshots, listRecordedProgressDates, listTaskHistory, listTaskTreeHistory, listUserLeaves, listWbsTasks, saveDailyProgress, saveScheduleChanges, saveSettings, updateAssignee, updateUserLeave,
   updateWbsTask, type AppSettings, type UserProfileInput, type WbsTaskInput,
 } from "../../src/lib/wbs";
 
@@ -25,7 +25,8 @@ beforeEach(() => { db.select.mockReset(); db.execute.mockReset(); db.execute.moc
 describe("WBS data methods", () => {
   it("maps WBS rows including project and assignee", async () => {
     db.select.mockResolvedValueOnce([{ id: 1, title: "設計", description: "", project_id: 2, project_name: "案件", parent_task_id: 5, parent_task_title: "要件定義", prerequisite_task_id: 6, prerequisite_task_title: "基盤", assignee_id: 3, assignee_name: "山田", status: "in_progress", progress: 40, country_code: "JP", planned_start: "2026-08-06", planned_end: "2026-08-13", business_days: 5, actual_start: "2026-08-06", actual_end: null, finalized: 1, today_daily_progress: 10, today_progress_note: "確認済み", latest_delay_reason: "レビュー待ち" }])
-      .mockResolvedValueOnce([{ task_id: 1, prerequisite_task_id: 6, prerequisite_task_title: "基盤" }, { task_id: 1, prerequisite_task_id: 7, prerequisite_task_title: "デザイン" }]);
+      .mockResolvedValueOnce([{ task_id: 1, prerequisite_task_id: 6, prerequisite_task_title: "基盤" }, { task_id: 1, prerequisite_task_id: 7, prerequisite_task_title: "デザイン" }])
+      .mockResolvedValueOnce([]);
     expect(await listWbsTasks("2026-08-07")).toEqual([{ id: 1, title: "設計", description: "", projectId: 2, projectName: "案件", parentTaskId: 5, parentTaskTitle: "要件定義", prerequisiteTaskId: 6, prerequisiteTaskTitle: "基盤", prerequisiteTaskIds: [6, 7], prerequisiteTasks: [{ id: 6, title: "基盤" }, { id: 7, title: "デザイン" }], assigneeId: 3, assigneeName: "山田", status: "in_progress", progress: 40, countryCode: "JP", plannedStart: "2026-08-06", plannedEnd: "2026-08-13", businessDays: 5, actualStart: "2026-08-06", actualEnd: null, finalized: true, todayDailyProgress: 10, todayProgressNote: "確認済み", latestDelayReason: "レビュー待ち" }]);
     expect(db.select).toHaveBeenCalledWith(expect.stringContaining("today_log.log_date=$1"), ["2026-08-07"]);
   });
@@ -43,6 +44,12 @@ describe("WBS data methods", () => {
     expect(db.select).toHaveBeenCalledWith(expect.stringContaining("exact_log.log_date=$1"), ["2026-08-07"]);
     expect(db.select).toHaveBeenCalledWith(expect.stringContaining("date(history.occurred_at, 'localtime')=$1"), ["2026-08-07"]);
     expect(db.select).toHaveBeenCalledWith(expect.stringContaining("history.event_type='rescheduled'"), ["2026-08-07"]);
+  });
+
+  it("lists recorded progress dates for a task", async () => {
+    db.select.mockResolvedValue([{ log_date: "2026-08-05" }, { log_date: "2026-08-07" }]);
+    expect(await listRecordedProgressDates(7)).toEqual(["2026-08-05", "2026-08-07"]);
+    expect(db.select).toHaveBeenCalledWith(expect.stringContaining("ORDER BY log_date"), [7]);
   });
 
   it("creates an unassigned WBS and trims text", async () => {
@@ -126,7 +133,7 @@ describe("WBS data methods", () => {
   });
 
   it("upserts daily progress and updates the WBS", async () => {
-    db.select.mockResolvedValue([{ progress: 40, previous_daily: 0, finalized: 1, planned_start: "2026-08-03", planned_end: "2026-08-14", business_days: 10, country_code: "JP", child_count: 0 }]);
+    db.select.mockResolvedValueOnce([{ progress: 40, previous_daily: 0, finalized: 1, planned_start: "2026-08-03", planned_end: "2026-08-14", business_days: 10, country_code: "JP", child_count: 0 }]).mockResolvedValueOnce([]);
     await saveDailyProgress(7, "2026-08-07", 20, " 進捗 ", "");
     expect(db.execute).toHaveBeenNthCalledWith(1, expect.stringContaining("wbs_progress_logs"), [7, "2026-08-07", 60, "進捗", 20]);
     expect(db.execute).toHaveBeenCalledTimes(3);
@@ -140,17 +147,26 @@ describe("WBS data methods", () => {
 
   it("requires and records a delay reason when cumulative progress is below plan", async () => {
     const stored = { progress: 20, previous_daily: 0, finalized: 1, planned_start: "2026-08-03", planned_end: "2026-08-14", business_days: 10, country_code: "JP", child_count: 0 };
-    db.select.mockResolvedValue([stored]);
+    db.select.mockResolvedValueOnce([stored]).mockResolvedValueOnce([]);
     await expect(saveDailyProgress(7, "2026-08-07", 5, "", "")).rejects.toThrow("理由");
+    db.select.mockResolvedValueOnce([stored]).mockResolvedValueOnce([]);
     await saveDailyProgress(7, "2026-08-07", 5, "確認中", "仕様確認待ち");
     expect(db.execute).toHaveBeenCalledTimes(4);
-    expect(db.execute).toHaveBeenLastCalledWith(expect.stringContaining("'delay'"), [7, "仕様確認待ち", "累計進捗 25%（計画 50%）"]);
+    expect(db.execute).toHaveBeenLastCalledWith(expect.stringContaining("'delay'"), [7, "仕様確認待ち", "2026-08-07時点の累計進捗 25%（計画 50%）"]);
   });
 
   it("replaces today's increment instead of adding it twice", async () => {
-    db.select.mockResolvedValue([{ progress: 60, previous_daily: 20, finalized: 0, planned_start: "2026-08-03", planned_end: "2026-08-14", business_days: 10, country_code: "JP", child_count: 0 }]);
+    db.select.mockResolvedValueOnce([{ progress: 60, previous_daily: 20, finalized: 0, planned_start: "2026-08-03", planned_end: "2026-08-14", business_days: 10, country_code: "JP", child_count: 0 }]).mockResolvedValueOnce([{ log_date: "2026-08-07", progress: 60, daily_progress: 20 }]);
     await saveDailyProgress(7, "2026-08-07", 10, "訂正", "");
     expect(db.execute).toHaveBeenNthCalledWith(1, expect.stringContaining("wbs_progress_logs"), [7, "2026-08-07", 50, "訂正", 10]);
+  });
+
+  it("recalculates later cumulative progress when a missed past date is added", async () => {
+    db.select.mockResolvedValueOnce([{ progress: 50, previous_daily: 0, finalized: 0, planned_start: "2026-08-03", planned_end: "2026-08-14", business_days: 10, country_code: "JP", child_count: 0 }]).mockResolvedValueOnce([{ log_date: "2026-08-08", progress: 50, daily_progress: 20 }]);
+    await saveDailyProgress(7, "2026-08-07", 10, "追加入力", "");
+    expect(db.execute).toHaveBeenNthCalledWith(1, expect.stringContaining("wbs_progress_logs"), [7, "2026-08-07", 40, "追加入力", 10]);
+    expect(db.execute).toHaveBeenNthCalledWith(2, "UPDATE wbs_progress_logs SET progress=$1 WHERE task_id=$2 AND log_date=$3", [60, 7, "2026-08-08"]);
+    expect(db.execute).toHaveBeenNthCalledWith(3, expect.stringContaining("UPDATE wbs_tasks"), [60, "2026-08-07", 7]);
   });
 
   it("finalizes tasks and persists reasoned schedule history", async () => {
@@ -203,16 +219,33 @@ describe("user and settings data methods", () => {
     expect(db.execute).toHaveBeenCalledTimes(3);
   });
 
+  it("lists, creates, updates, and deletes user leave", async () => {
+    db.select.mockResolvedValueOnce([{ id: 4, user_id: 3, user_name: "山田", leave_date: "2026-08-12", leave_type: "planned", leave_unit: "morning", reason: "通院" }]);
+    expect(await listUserLeaves()).toEqual([{ id: 4, userId: 3, userName: "山田", date: "2026-08-12", type: "planned", unit: "morning", reason: "通院" }]);
+    await createUserLeave({ userId: 3, date: "2026-08-13", type: "planned", unit: "afternoon", reason: " 私用 " });
+    await updateUserLeave(4, { userId: 3, date: "2026-08-12", type: "unplanned", unit: "full_day", reason: " 体調不良 " });
+    await deleteUserLeave(4);
+    expect(db.execute).toHaveBeenCalledWith(expect.stringContaining("INSERT INTO user_leaves"), [3, "2026-08-13", "planned", "afternoon", "私用"]);
+    expect(db.execute).toHaveBeenCalledWith(expect.stringContaining("UPDATE user_leaves"), [3, "2026-08-12", "unplanned", "full_day", "体調不良", 4]);
+    expect(db.execute).toHaveBeenLastCalledWith("DELETE FROM user_leaves WHERE id=$1", [4]);
+  });
+
+  it("requires a reason for unplanned leave", async () => {
+    await expect(createUserLeave({ userId: 3, date: "2026-08-13", type: "unplanned", unit: "full_day", reason: " " })).rejects.toThrow("理由");
+    expect(db.execute).not.toHaveBeenCalled();
+  });
+
   it("loads stored settings and defaults when absent", async () => {
-    db.select.mockResolvedValueOnce([{ country_code: "US", notification_time: "09:00", notifications_enabled: 1, last_notified_date: "2026-08-06" }]);
-    expect(await getSettings()).toEqual({ countryCode: "US", notificationTime: "09:00", notificationsEnabled: true, lastNotifiedDate: "2026-08-06" });
+    db.select.mockResolvedValueOnce([{ country_code: "US", notification_time: "09:00", notifications_enabled: 1, last_notified_date: "2026-08-06", daily_report_ancestor_depth: 5 }]);
+    expect(await getSettings()).toEqual({ countryCode: "US", notificationTime: "09:00", notificationsEnabled: true, lastNotifiedDate: "2026-08-06", dailyReportAncestorDepth: 5 });
     db.select.mockResolvedValueOnce([]);
-    expect(await getSettings()).toEqual({ countryCode: "JP", notificationTime: "17:30", notificationsEnabled: false, lastNotifiedDate: null });
+    expect(await getSettings()).toEqual({ countryCode: "JP", notificationTime: "17:30", notificationsEnabled: false, lastNotifiedDate: null, dailyReportAncestorDepth: 3 });
   });
 
   it("saves settings using SQLite values", async () => {
-    const settings: AppSettings = { countryCode: "GB", notificationTime: "18:00", notificationsEnabled: true, lastNotifiedDate: null };
+    const settings: AppSettings = { countryCode: "GB", notificationTime: "18:00", notificationsEnabled: true, lastNotifiedDate: null, dailyReportAncestorDepth: 4 };
     await saveSettings(settings);
-    expect(db.execute).toHaveBeenCalledWith(expect.stringContaining("UPDATE app_settings"), ["GB", "18:00", 1, null]);
+    expect(db.execute).toHaveBeenCalledWith(expect.stringContaining("UPDATE app_settings"), ["GB", "18:00", 1, null, 4]);
+    await expect(saveSettings({ ...settings, dailyReportAncestorDepth: 11 })).rejects.toThrow("0から10");
   });
 });

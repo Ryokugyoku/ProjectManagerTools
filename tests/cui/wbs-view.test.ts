@@ -47,6 +47,7 @@ describe("WBS view methods", () => {
   it("switches the daily progress action by today's record and hides it for parents", () => {
     expect(dailyProgressActionLabel({}, false)).toBe("今日進んだ進捗を入力");
     expect(dailyProgressActionLabel({ todayDailyProgress: 0 }, false)).toBe("今日の進捗を編集");
+    expect(dailyProgressActionLabel({}, false, true)).toBe("過去の進捗を入力");
     expect(dailyProgressActionLabel({ todayDailyProgress: 10 }, true)).toBeNull();
   });
 

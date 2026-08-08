@@ -1,5 +1,5 @@
 import { addCalendarDays, calculateEndDate, isBusinessDay, parseISODate, shiftBusinessDate } from "./calendar";
-import type { WbsTask } from "./wbs";
+import type { UserLeave, WbsTask } from "./wbs";
 
 export type TaskSchedule = { plannedStart: string; plannedEnd: string; businessDays: number };
 export type ScheduleChange = { taskId: number; before: TaskSchedule; after: TaskSchedule; historyContext?: string };
@@ -15,25 +15,59 @@ export function countBusinessDays(start: string, end: string, countryCode: strin
   return count;
 }
 
-export function expectedProgress(task: Pick<WbsTask, "plannedStart" | "plannedEnd" | "businessDays" | "countryCode">, date: string): number {
-  if (date < task.plannedStart) return 0;
-  if (date >= task.plannedEnd) return 100;
-  const elapsed = countBusinessDays(task.plannedStart, date, task.countryCode);
-  return Math.min(100, Math.round((elapsed / task.businessDays) * 100));
+type ProgressPlan = Pick<WbsTask, "plannedStart" | "plannedEnd" | "businessDays" | "countryCode"> & { assigneeLeaves?: UserLeave[] };
+export type DayCheckpoint = "none" | "morning" | "day";
+
+export function availableWorkdays(start: string, end: string, countryCode: string, leaves: UserLeave[] = []): number {
+  if (!start || !end || parseISODate(start) > parseISODate(end)) return 0;
+  const leaveByDate = new Map(leaves.map((leave) => [leave.date, leave.unit === "full_day" ? 1 : .5]));
+  let cursor = start;
+  let capacity = 0;
+  while (cursor <= end) {
+    if (isBusinessDay(cursor, countryCode)) capacity += Math.max(0, 1 - (leaveByDate.get(cursor) ?? 0));
+    cursor = addCalendarDays(cursor, 1);
+  }
+  return capacity;
 }
 
-export function isTaskDelayed(task: Pick<WbsTask, "finalized" | "status" | "progress" | "plannedStart" | "plannedEnd" | "businessDays" | "countryCode">, date: string): boolean {
+export function expectedProgress(task: ProgressPlan, date: string, checkpoint: DayCheckpoint = "day"): number {
+  if (date < task.plannedStart) return 0;
+  if (date > task.plannedEnd || (date === task.plannedEnd && checkpoint === "day")) return 100;
+  const leaveReduction = (task.assigneeLeaves ?? []).reduce((sum, leave) => {
+    if (leave.date < task.plannedStart || leave.date > task.plannedEnd || !isBusinessDay(leave.date, task.countryCode)) return sum;
+    return sum + (leave.unit === "full_day" ? 1 : .5);
+  }, 0);
+  const available = Math.max(0, task.businessDays - leaveReduction);
+  if (available <= 0) return 0;
+  const previousDate = addCalendarDays(date, -1);
+  const elapsedBeforeToday = availableWorkdays(task.plannedStart, previousDate, task.countryCode, task.assigneeLeaves);
+  const elapsed = elapsedBeforeToday + availableCapacityAtCheckpoint(date, task.countryCode, task.assigneeLeaves, checkpoint);
+  return Math.min(100, Math.round((elapsed / available) * 100));
+}
+
+export function isTaskDelayed(task: Pick<WbsTask, "finalized" | "status" | "progress" | "plannedStart" | "plannedEnd" | "businessDays" | "countryCode" | "assigneeLeaves">, date: string): boolean {
   return task.finalized && task.status !== "completed" && task.progress < expectedProgress(task, date);
 }
 
 export type ProgressHealth = "untracked" | "ahead" | "on-track" | "behind";
 
-export function progressHealth(task: Pick<WbsTask, "finalized" | "progress" | "plannedStart" | "plannedEnd" | "businessDays" | "countryCode">, date: string): ProgressHealth {
+export function progressHealth(task: Pick<WbsTask, "finalized" | "progress" | "plannedStart" | "plannedEnd" | "businessDays" | "countryCode" | "assigneeLeaves">, date: string): ProgressHealth {
   if (!task.finalized) return "untracked";
   const planned = expectedProgress(task, date);
   if (task.progress > planned) return "ahead";
   if (task.progress < planned) return "behind";
   return "on-track";
+}
+
+export function currentDayCheckpoint(now = new Date()): DayCheckpoint {
+  return now.getHours() < 12 ? "none" : "morning";
+}
+
+function availableCapacityAtCheckpoint(date: string, countryCode: string, leaves: UserLeave[] | undefined, checkpoint: DayCheckpoint): number {
+  if (!isBusinessDay(date, countryCode) || checkpoint === "none") return 0;
+  const leave = leaves?.find((item) => item.date === date);
+  if (checkpoint === "day") return leave?.unit === "full_day" ? 0 : leave ? .5 : 1;
+  return leave?.unit === "full_day" || leave?.unit === "morning" ? 0 : .5;
 }
 
 export function buildScheduleCascade(tasks: WbsTask[], taskId: number, schedule: TaskSchedule): ScheduleChange[] {

@@ -202,8 +202,9 @@ export function ancestorTrail(tasks: WbsTask[], taskId: number): WbsTask[] {
   return result;
 }
 
-export function dailyProgressActionLabel(task: Pick<WbsTask, "todayDailyProgress">, hasChildren: boolean): string | null {
+export function dailyProgressActionLabel(task: Pick<WbsTask, "todayDailyProgress">, hasChildren: boolean, hasPastMissing = false): string | null {
   if (hasChildren) return null;
+  if (hasPastMissing) return "過去の進捗を入力";
   return task.todayDailyProgress == null ? "今日進んだ進捗を入力" : "今日の進捗を編集";
 }
 

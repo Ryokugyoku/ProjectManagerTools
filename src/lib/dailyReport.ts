@@ -22,7 +22,15 @@ export type DailyProjectReport = {
   variance: ScheduleVariance;
   delayedTaskCount: number;
   people: DailyReportPerson[];
-  activeTaskChains: WbsTask[][];
+  activeTaskHierarchy: DailyReportHierarchyNode[];
+  activeTaskCount: number;
+};
+
+export type DailyReportHierarchyNode = {
+  task: WbsTask;
+  active: boolean;
+  omittedAncestorCount: number;
+  children: DailyReportHierarchyNode[];
 };
 
 export type DelayImpact = {
@@ -78,11 +86,39 @@ export function calculateDelayImpact(task: WbsTask, tasks: WbsTask[], delayBusin
   };
 }
 
+export function buildActiveTaskHierarchy(tasks: WbsTask[], ancestorDepth: number): DailyReportHierarchyNode[] {
+  const maxAncestors = Math.max(0, Math.min(10, Math.trunc(ancestorDepth)));
+  const activeTasks = tasks.filter((task) => task.status === "in_progress");
+  const activeIds = new Set(activeTasks.map((task) => task.id));
+  const nodes = new Map<number, DailyReportHierarchyNode>();
+  const childIds = new Set<number>();
+
+  for (const activeTask of activeTasks) {
+    const chain = [...ancestorTrail(tasks, activeTask.id), activeTask];
+    const visible = chain.slice(Math.max(0, chain.length - maxAncestors - 1));
+    visible.forEach((task, index) => {
+      const node = nodes.get(task.id) ?? { task, active: activeIds.has(task.id), omittedAncestorCount: 0, children: [] };
+      node.active ||= activeIds.has(task.id);
+      nodes.set(task.id, node);
+      if (index === 0) return;
+      const parent = nodes.get(visible[index - 1].id)!;
+      if (!parent.children.some((child) => child.task.id === task.id)) parent.children.push(node);
+      childIds.add(task.id);
+    });
+  }
+
+  return [...nodes.values()].filter((node) => !childIds.has(node.task.id)).map((node) => ({
+    ...node,
+    omittedAncestorCount: ancestorTrail(tasks, node.task.id).length,
+  }));
+}
+
 export function buildDailyProjectReports(
   projects: Project[],
   tasks: WbsTask[],
   snapshots: DailyProgressSnapshot[],
   date: string,
+  ancestorDepth = 3,
 ): DailyProjectReport[] {
   const snapshotByTask = new Map(snapshots.map((snapshot) => [snapshot.taskId, snapshot]));
   return projects.map((project) => {
@@ -108,7 +144,8 @@ export function buildDailyProjectReports(
       variance: calculateProjectScheduleVariance(projectTasks, snapshots, date),
       delayedTaskCount,
       people: [...people.values()].sort((a, b) => a.name.localeCompare(b.name, "ja")),
-      activeTaskChains: activeTasks.map((task) => [...ancestorTrail(projectTasks, task.id), task]),
+      activeTaskHierarchy: buildActiveTaskHierarchy(projectTasks, ancestorDepth),
+      activeTaskCount: activeTasks.length,
     };
-  }).filter((report) => report.people.length > 0 || report.activeTaskChains.length > 0);
+  }).filter((report) => report.people.length > 0 || report.activeTaskCount > 0);
 }

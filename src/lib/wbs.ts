@@ -19,6 +19,18 @@ export type UserProfile = {
 };
 export type Assignee = UserProfile;
 export type UserProfileInput = Omit<UserProfile, "id">;
+export type UserLeaveType = "planned" | "unplanned";
+export type UserLeaveUnit = "full_day" | "morning" | "afternoon";
+export type UserLeave = {
+  id: number;
+  userId: number;
+  userName: string;
+  date: string;
+  type: UserLeaveType;
+  unit: UserLeaveUnit;
+  reason: string;
+};
+export type UserLeaveInput = Omit<UserLeave, "id" | "userName">;
 export type WbsTask = {
   id: number;
   title: string;
@@ -45,6 +57,7 @@ export type WbsTask = {
   todayDailyProgress?: number | null;
   todayProgressNote?: string;
   latestDelayReason?: string;
+  assigneeLeaves?: UserLeave[];
 };
 export type WbsTaskInput = Omit<WbsTask, "id" | "assigneeName" | "projectName" | "parentTaskTitle" | "prerequisiteTaskTitle" | "prerequisiteTasks" | "plannedEnd" | "finalized" | "todayDailyProgress" | "todayProgressNote" | "latestDelayReason"> & {
   plannedEnd: string;
@@ -54,6 +67,7 @@ export type AppSettings = {
   notificationTime: string;
   notificationsEnabled: boolean;
   lastNotifiedDate: string | null;
+  dailyReportAncestorDepth: number;
 };
 export type WorkHistoryType = "created" | "finalized" | "rescheduled" | "progress" | "delay";
 export type WorkHistoryEntry = { id: number; taskId: number; type: WorkHistoryType; reason: string; details: string; occurredAt: string };
@@ -94,6 +108,11 @@ type AssigneeRow = {
 type SettingsRow = {
   country_code: string; notification_time: string; notifications_enabled: number;
   last_notified_date: string | null;
+  daily_report_ancestor_depth: number;
+};
+type UserLeaveRow = {
+  id: number; user_id: number; user_name: string; leave_date: string;
+  leave_type: UserLeaveType; leave_unit: UserLeaveUnit; reason: string;
 };
 
 let databasePromise: Promise<Database> | undefined;
@@ -131,13 +150,23 @@ export async function listWbsTasks(date = localISODate()): Promise<WbsTask[]> {
     JOIN wbs_tasks prerequisite ON prerequisite.id=dependency.prerequisite_task_id
     ORDER BY dependency.task_id, prerequisite.planned_start, prerequisite.id
   `);
+  const leaveRows = await db.select<UserLeaveRow[]>(`SELECT leave.id, leave.user_id,
+    assignee.name AS user_name, leave.leave_date, leave.leave_type, leave.leave_unit, leave.reason
+    FROM user_leaves leave JOIN assignees assignee ON assignee.id=leave.user_id
+    ORDER BY leave.leave_date, leave.id`) ?? [];
+  const leavesByUser = new Map<number, UserLeave[]>();
+  for (const row of leaveRows) leavesByUser.set(row.user_id, [...(leavesByUser.get(row.user_id) ?? []), mapUserLeave(row)]);
   const byTask = new Map<number, Array<{ id: number; title: string }>>();
   for (const dependency of dependencies) {
     byTask.set(dependency.task_id, [...(byTask.get(dependency.task_id) ?? []), {
       id: dependency.prerequisite_task_id, title: dependency.prerequisite_task_title,
     }]);
   }
-  return deriveParentProgress(rows.map((row) => mapTask(row, byTask.get(row.id) ?? [])));
+  return deriveParentProgress(rows.map((row) => {
+    const task = mapTask(row, byTask.get(row.id) ?? []);
+    const leaves = row.assignee_id === null ? [] : leavesByUser.get(row.assignee_id) ?? [];
+    return leaves.length > 0 ? { ...task, assigneeLeaves: leaves } : task;
+  }));
 }
 
 export async function listDailyProgressSnapshots(date: string): Promise<DailyProgressSnapshot[]> {
@@ -186,6 +215,15 @@ export async function listDailyProgressSnapshots(date: string): Promise<DailyPro
     rescheduleReason: row.reschedule_reason ?? "",
     delayReason: row.delay_reason ?? "",
   }));
+}
+
+export async function listRecordedProgressDates(taskId: number): Promise<string[]> {
+  const db = await database();
+  const rows = await db.select<Array<{ log_date: string }>>(
+    "SELECT log_date FROM wbs_progress_logs WHERE task_id=$1 ORDER BY log_date",
+    [taskId],
+  );
+  return rows.map((row) => row.log_date);
 }
 
 export async function createWbsTask(input: WbsTaskInput): Promise<void> {
@@ -264,10 +302,10 @@ export async function saveScheduleChanges(changes: Array<{ taskId: number; plann
 }
 
 export async function saveDailyProgress(taskId: number, date: string, dailyProgress: number, note: string, delayReason: string) {
-  if (!Number.isFinite(dailyProgress) || dailyProgress < 0 || dailyProgress > 100) throw new Error("今日進んだ進捗は0〜100%で入力してください。");
+  if (!Number.isFinite(dailyProgress) || dailyProgress < 0 || dailyProgress > 100) throw new Error("その日に進んだ進捗は0〜100%で入力してください。");
   const db = await database();
-  const rows = await db.select<Array<{ progress: number; finalized: number; planned_start: string; planned_end: string; business_days: number; country_code: string; previous_daily: number; child_count: number }>>(
-    `SELECT w.progress, w.finalized, w.planned_start, w.planned_end, w.business_days, w.country_code,
+  const rows = await db.select<Array<{ progress: number; finalized: number; planned_start: string; planned_end: string; business_days: number; country_code: string; assignee_id: number | null; previous_daily: number; child_count: number }>>(
+    `SELECT w.progress, w.finalized, w.planned_start, w.planned_end, w.business_days, w.country_code, w.assignee_id,
       COALESCE((SELECT daily_progress FROM wbs_progress_logs WHERE task_id=w.id AND log_date=$2), 0) AS previous_daily,
       (SELECT COUNT(*) FROM wbs_tasks child WHERE child.parent_task_id=w.id) AS child_count
       FROM wbs_tasks w WHERE w.id=$1`,
@@ -276,24 +314,43 @@ export async function saveDailyProgress(taskId: number, date: string, dailyProgr
   const task = rows[0];
   if (!task) throw new Error("進捗を記録するタスクが見つかりません。");
   if (task.child_count > 0) throw new Error("サブタスクを持つタスクには進捗を直接入力できません。");
-  const totalProgress = Math.max(0, Math.min(100, task.progress - task.previous_daily + dailyProgress));
-  const expected = expectedProgress({ plannedStart: task.planned_start, plannedEnd: task.planned_end, businessDays: task.business_days, countryCode: task.country_code }, date);
+  const logs = await db.select<Array<{ log_date: string; progress: number; daily_progress: number }>>(
+    "SELECT log_date, progress, daily_progress FROM wbs_progress_logs WHERE task_id=$1 ORDER BY log_date",
+    [taskId],
+  );
+  const leaveRows = task.assignee_id == null ? [] : await db.select<UserLeaveRow[]>(`SELECT leave.id, leave.user_id,
+    assignee.name AS user_name, leave.leave_date, leave.leave_type, leave.leave_unit, leave.reason
+    FROM user_leaves leave JOIN assignees assignee ON assignee.id=leave.user_id WHERE leave.user_id=$1`, [task.assignee_id]);
+  const baselineProgress = logs.length > 0 ? Math.max(0, logs[0].progress - logs[0].daily_progress) : task.progress;
+  const dailyByDate = new Map(logs.map((log) => [log.log_date, log.daily_progress]));
+  dailyByDate.set(date, dailyProgress);
+  let runningProgress = baselineProgress;
+  const recalculated = [...dailyByDate.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([logDate, increment]) => {
+    runningProgress = Math.min(100, runningProgress + increment);
+    return { logDate, progress: runningProgress };
+  });
+  const selectedProgress = recalculated.find((log) => log.logDate === date)?.progress ?? baselineProgress;
+  const totalProgress = recalculated[recalculated.length - 1]?.progress ?? baselineProgress;
+  const expected = expectedProgress({ plannedStart: task.planned_start, plannedEnd: task.planned_end, businessDays: task.business_days, countryCode: task.country_code, assigneeLeaves: leaveRows.map(mapUserLeave) }, date);
   const normalizedReason = delayReason.trim();
-  if (task.finalized === 1 && totalProgress < expected && !normalizedReason) throw new Error("計画進捗を下回る理由を入力してください。");
+  if (task.finalized === 1 && selectedProgress < expected && !normalizedReason) throw new Error("計画進捗を下回る理由を入力してください。");
   await db.execute(`
     INSERT INTO wbs_progress_logs (task_id, log_date, progress, note, daily_progress)
     VALUES ($1, $2, $3, $4, $5)
     ON CONFLICT(task_id, log_date) DO UPDATE SET progress=excluded.progress, note=excluded.note, daily_progress=excluded.daily_progress
-  `, [taskId, date, totalProgress, note.trim(), dailyProgress]);
+  `, [taskId, date, selectedProgress, note.trim(), dailyProgress]);
+  for (const log of recalculated.filter((log) => log.logDate > date)) {
+    await db.execute("UPDATE wbs_progress_logs SET progress=$1 WHERE task_id=$2 AND log_date=$3", [log.progress, taskId, log.logDate]);
+  }
   await db.execute(`
     UPDATE wbs_tasks SET progress=$1,
-      status=CASE WHEN $1=100 THEN 'completed' WHEN $1>0 THEN 'in_progress' ELSE status END,
-      actual_end=CASE WHEN $1=100 THEN COALESCE(actual_end, $2) ELSE actual_end END,
+      status=CASE WHEN $1=100 THEN 'completed' WHEN $1>0 THEN 'in_progress' ELSE 'not_started' END,
+      actual_end=CASE WHEN $1=100 THEN COALESCE(actual_end, $2) ELSE NULL END,
       updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id=$3
   `, [totalProgress, date, taskId]);
-  await db.execute("INSERT INTO wbs_work_history (task_id, event_type, details) VALUES ($1, 'progress', $2)", [taskId, `今日 +${dailyProgress}% / 累計 ${totalProgress}% / 計画 ${expected}%${note.trim() ? `\n${note.trim()}` : ""}`]);
-  if (task.finalized === 1 && totalProgress < expected) {
-    await db.execute("INSERT INTO wbs_work_history (task_id, event_type, reason, details) VALUES ($1, 'delay', $2, $3)", [taskId, normalizedReason, `累計進捗 ${totalProgress}%（計画 ${expected}%）`]);
+  await db.execute("INSERT INTO wbs_work_history (task_id, event_type, details) VALUES ($1, 'progress', $2)", [taskId, `${date} +${dailyProgress}% / 当日累計 ${selectedProgress}% / 計画 ${expected}%${note.trim() ? `\n${note.trim()}` : ""}`]);
+  if (task.finalized === 1 && selectedProgress < expected) {
+    await db.execute("INSERT INTO wbs_work_history (task_id, event_type, reason, details) VALUES ($1, 'delay', $2, $3)", [taskId, normalizedReason, `${date}時点の累計進捗 ${selectedProgress}%（計画 ${expected}%）`]);
   }
 }
 
@@ -358,24 +415,57 @@ export async function deleteAssignee(id: number): Promise<void> {
   await db.execute("DELETE FROM assignees WHERE id=$1", [id]);
 }
 
+export async function listUserLeaves(): Promise<UserLeave[]> {
+  const db = await database();
+  const rows = await db.select<UserLeaveRow[]>(`SELECT leave.id, leave.user_id,
+    assignee.name AS user_name, leave.leave_date, leave.leave_type, leave.leave_unit, leave.reason
+    FROM user_leaves leave JOIN assignees assignee ON assignee.id=leave.user_id
+    ORDER BY leave.leave_date DESC, leave.id DESC`);
+  return rows.map(mapUserLeave);
+}
+
+export async function createUserLeave(input: UserLeaveInput): Promise<void> {
+  validateUserLeave(input);
+  const db = await database();
+  await db.execute(`INSERT INTO user_leaves (user_id, leave_date, leave_type, leave_unit, reason)
+    VALUES ($1, $2, $3, $4, $5)`, [input.userId, input.date, input.type, input.unit, input.reason.trim()]);
+}
+
+export async function updateUserLeave(id: number, input: UserLeaveInput): Promise<void> {
+  validateUserLeave(input);
+  const db = await database();
+  await db.execute(`UPDATE user_leaves SET user_id=$1, leave_date=$2, leave_type=$3,
+    leave_unit=$4, reason=$5, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id=$6`,
+  [input.userId, input.date, input.type, input.unit, input.reason.trim(), id]);
+}
+
+export async function deleteUserLeave(id: number): Promise<void> {
+  const db = await database();
+  await db.execute("DELETE FROM user_leaves WHERE id=$1", [id]);
+}
+
 export async function getSettings(): Promise<AppSettings> {
   const db = await database();
-  const rows = await db.select<SettingsRow[]>("SELECT country_code, notification_time, notifications_enabled, last_notified_date FROM app_settings WHERE id=1");
+  const rows = await db.select<SettingsRow[]>("SELECT country_code, notification_time, notifications_enabled, last_notified_date, daily_report_ancestor_depth FROM app_settings WHERE id=1");
   const row = rows[0];
   return {
     countryCode: row?.country_code ?? "JP",
     notificationTime: row?.notification_time ?? "17:30",
     notificationsEnabled: row?.notifications_enabled === 1,
     lastNotifiedDate: row?.last_notified_date ?? null,
+    dailyReportAncestorDepth: row?.daily_report_ancestor_depth ?? 3,
   };
 }
 
 export async function saveSettings(settings: AppSettings): Promise<void> {
+  if (!Number.isInteger(settings.dailyReportAncestorDepth) || settings.dailyReportAncestorDepth < 0 || settings.dailyReportAncestorDepth > 10) {
+    throw new Error("前日作業報告の親階層数は0から10の整数で指定してください。");
+  }
   const db = await database();
   await db.execute(`UPDATE app_settings SET country_code=$1, notification_time=$2,
-    notifications_enabled=$3, last_notified_date=$4 WHERE id=1`, [
+    notifications_enabled=$3, last_notified_date=$4, daily_report_ancestor_depth=$5 WHERE id=1`, [
     settings.countryCode, settings.notificationTime, settings.notificationsEnabled ? 1 : 0,
-    settings.lastNotifiedDate,
+    settings.lastNotifiedDate, settings.dailyReportAncestorDepth,
   ]);
 }
 
@@ -427,6 +517,18 @@ function userValues(input: UserProfileInput): unknown[] {
   return [input.name.trim(), input.email.trim(), input.birthday || null,
     input.department.trim(), input.role.trim(), input.timezone.trim(),
     input.interests.trim(), input.skills.trim(), input.workStyle.trim(), input.notes.trim()];
+}
+
+function validateUserLeave(input: UserLeaveInput) {
+  if (!Number.isInteger(input.userId) || input.userId < 1) throw new Error("休暇を登録するユーザーを選択してください。");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.date)) throw new Error("休暇日を入力してください。");
+  if (!(["planned", "unplanned"] as const).includes(input.type)) throw new Error("休暇種別を選択してください。");
+  if (!(["full_day", "morning", "afternoon"] as const).includes(input.unit)) throw new Error("取得単位を選択してください。");
+  if (input.type === "unplanned" && !input.reason.trim()) throw new Error("計画外休暇の理由を入力してください。");
+}
+
+function mapUserLeave(row: UserLeaveRow): UserLeave {
+  return { id: row.id, userId: row.user_id, userName: row.user_name, date: row.leave_date, type: row.leave_type, unit: row.leave_unit, reason: row.reason };
 }
 
 async function validateProjectAssignment(db: Database, projectId: number | null, assigneeId: number | null) {
