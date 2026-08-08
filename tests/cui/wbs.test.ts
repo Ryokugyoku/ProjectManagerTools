@@ -99,16 +99,16 @@ describe("WBS data methods", () => {
     db.select.mockResolvedValueOnce([{ count: 1 }]);
     await createWbsTask({ ...task, projectId: 4, ownerUserId: 8 });
     db.select.mockResolvedValueOnce([{ count: 1 }]).mockResolvedValueOnce([{ invalid_children: 0 }]).mockResolvedValueOnce([{ invalid_dependents: 0 }]).mockResolvedValueOnce([{ finalized: 0 }]);
-    await updateWbsTask(9, { ...task, projectId: 4, ownerUserId: 8 });
+    await updateWbsTask(9, { ...task, projectId: 4, ownerUserId: 8, scheduleAssigned: false });
     expect(db.select).toHaveBeenCalledTimes(5);
     expect(db.execute).toHaveBeenCalledTimes(4);
   });
 
-  it("creates a child task only when its parent belongs to the same project", async () => {
+  it("creates a scheduled child task only when its parent belongs to the same project", async () => {
     db.select.mockResolvedValue([{ parent_project_id: 4, is_descendant: 0 }]);
     await createWbsTask({ ...task, projectId: 4, parentTaskId: 7 });
     expect(db.execute).toHaveBeenCalledWith(expect.stringContaining("parent_task_id"), expect.arrayContaining([4, 7]));
-    expect(db.execute.mock.calls[0][1]?.[11]).toBe(0);
+    expect(db.execute.mock.calls[0][1]?.[11]).toBe(1);
     expect(db.execute).toHaveBeenCalledWith(expect.stringContaining("'created'"), [7, "サブタスク「設計」を追加しました。"]);
 
     db.select.mockResolvedValue([{ parent_project_id: 5, is_descendant: 0 }]);

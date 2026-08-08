@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { WbsTask } from "../../src/lib/wbs";
-import { availableWorkdays, deriveParentProgress, expectedProgress, isTaskDelayed } from "../../src/lib/wbsPlanning";
+import { availableWorkdays, buildAncestorEndExtensions, deriveParentProgress, expectedProgress, isTaskDelayed } from "../../src/lib/wbsPlanning";
 
 const base: WbsTask = {
   id: 1, title: "実装", description: "", projectId: 1, projectName: "案件", parentTaskId: null,
@@ -75,5 +75,21 @@ describe("日程割り当てと階層の組み合わせ", () => {
       { ...base, id: 3, parentTaskId: 1, progress: 0, businessDays: 1, scheduleAssigned },
     ];
     expect(deriveParentProgress([parent, ...children])[0].progress).toBe(expected);
+  });
+});
+
+describe("サブタスク追加時の祖先終了日延長", () => {
+  // 因子: 階層（親のみ/親と祖先）、子の終了日（親期間内/親期間超過）。
+  const parent = { ...base, id: 2, parentTaskId: 1, plannedStart: "2026-08-05", plannedEnd: "2026-08-07", businessDays: 3 };
+
+  it.each([
+    ["親のみ", [{ ...parent, parentTaskId: null }], "2026-08-06", []],
+    ["親のみ", [{ ...parent, parentTaskId: null }], "2026-08-18", [2]],
+    ["親と祖先", [base, parent], "2026-08-06", []],
+    ["親と祖先", [base, parent], "2026-08-18", [2, 1]],
+  ] as const)("depth=%s requiredEnd=%s", (_depth, tasks, requiredEnd, expectedIds) => {
+    const changes = buildAncestorEndExtensions([...tasks], 2, requiredEnd, "子");
+    expect(changes.map((change) => change.taskId)).toEqual(expectedIds);
+    expect(changes.every((change) => change.after.plannedStart === tasks.find((task) => task.id === change.taskId)?.plannedStart)).toBe(true);
   });
 });

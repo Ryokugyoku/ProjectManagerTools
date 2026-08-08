@@ -19,11 +19,14 @@ describe("WBSの操作文言", () => {
     expect(appSource).toContain("小さなサブタスクとして分割すると");
   });
 
-  it("サブタスクは親日程を変えず日程未割り当てで追加する", () => {
-    expect(appSource).toContain("日程未割り当てで追加します");
-    expect(appSource).toContain("親タスクの日程は変更しません");
-    expect(appSource).toContain("scheduleAssigned: !isSubtask");
-    expect(appSource).not.toContain("buildScheduleCascadeForNewChild");
+  it("サブタスク追加時に日程を設定し、親を超える場合は確認する", () => {
+    expect(appSource).toContain("親の開始予定日を引き継いでいます");
+    expect(appSource).toContain("開始予定日と必要営業日数を設定してください");
+    expect(appSource).toContain("<label>必要営業日数<input");
+    expect(appSource).toContain("親タスクの日程を超えます");
+    expect(appSource).toContain("buildAncestorEndExtensions");
+    expect(appSource).toContain("window.confirm");
+    expect(appSource).toContain("サブタスク追加による親日程の調整");
   });
 
   it("タスク入力では担当者と表示し、営業日数の1はプレースホルダーにする", () => {

@@ -241,7 +241,7 @@ export async function createWbsTask(input: WbsTaskInput): Promise<void> {
   await validateParentTask(db, null, input.projectId, input.parentTaskId);
   const prerequisiteIds = normalizedPrerequisiteIds(input);
   await validatePrerequisiteTasks(db, null, input.projectId, input.parentTaskId, prerequisiteIds);
-  const creationInput = { ...input, scheduleAssigned: input.parentTaskId === null };
+  const creationInput = { ...input, scheduleAssigned: true };
   const result = await db.execute(`
     INSERT INTO wbs_tasks
       (title, description, project_id, parent_task_id, owner_user_id, status, progress,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { WbsTask } from "../../src/lib/wbs";
-import { buildScheduleCascade, countBusinessDays, deriveParentProgress, expectedProgress, progressHealth, scheduleChangesRequireReason } from "../../src/lib/wbsPlanning";
+import { buildAncestorEndExtensions, buildScheduleCascade, countBusinessDays, deriveParentProgress, expectedProgress, progressHealth, scheduleChangesRequireReason } from "../../src/lib/wbsPlanning";
 
 const base: WbsTask = {
   id: 1, title: "親", description: "", projectId: 1, projectName: "案件", parentTaskId: null,
@@ -74,5 +74,19 @@ describe("WBS planning methods", () => {
     expect(scheduleChangesRequireReason([base], changed)).toBe(true);
     expect(scheduleChangesRequireReason([{ ...base, finalized: false }], changed)).toBe(false);
     expect(scheduleChangesRequireReason([base], [])).toBe(false);
+  });
+
+  it("extends only the end of every ancestor when a new child exceeds their schedules", () => {
+    const parent = { ...base, id: 2, title: "親", parentTaskId: 1, parentTaskTitle: "祖先", plannedStart: "2026-08-05", plannedEnd: "2026-08-08", businessDays: 4 };
+    const changes = buildAncestorEndExtensions([base, parent], 2, "2026-08-18", "新しい子");
+    expect(changes.map((change) => [change.taskId, change.after])).toEqual([
+      [2, { plannedStart: "2026-08-05", plannedEnd: "2026-08-18", businessDays: 9 }],
+      [1, { plannedStart: "2026-08-03", plannedEnd: "2026-08-18", businessDays: 11 }],
+    ]);
+    expect(changes.every((change) => change.historyContext === "サブタスク「新しい子」の追加に連動")).toBe(true);
+  });
+
+  it("does not change ancestors when the child fits inside the parent", () => {
+    expect(buildAncestorEndExtensions([base], 1, "2026-08-07", "子")).toEqual([]);
   });
 });

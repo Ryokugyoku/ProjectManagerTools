@@ -131,6 +131,36 @@ export function buildScheduleCascade(tasks: WbsTask[], taskId: number, schedule:
   return changes;
 }
 
+export function buildAncestorEndExtensions(tasks: WbsTask[], parentTaskId: number | null, requiredEnd: string, childTitle: string): ScheduleChange[] {
+  const byId = new Map(tasks.map((task) => [task.id, task]));
+  const changes: ScheduleChange[] = [];
+  const visited = new Set<number>();
+  let parentId = parentTaskId;
+  let descendantEnd = requiredEnd;
+  while (parentId !== null && !visited.has(parentId)) {
+    visited.add(parentId);
+    const parent = byId.get(parentId);
+    if (!parent) break;
+    const before = taskSchedule(parent);
+    const plannedEnd = before.plannedEnd < descendantEnd ? descendantEnd : before.plannedEnd;
+    if (plannedEnd !== before.plannedEnd) {
+      changes.push({
+        taskId: parent.id,
+        before,
+        after: {
+          plannedStart: before.plannedStart,
+          plannedEnd,
+          businessDays: Math.max(1, countBusinessDays(before.plannedStart, plannedEnd, parent.countryCode)),
+        },
+        historyContext: `サブタスク「${childTitle}」の追加に連動`,
+      });
+    }
+    descendantEnd = plannedEnd;
+    parentId = parent.parentTaskId;
+  }
+  return changes;
+}
+
 export function deriveParentProgress(tasks: WbsTask[]): WbsTask[] {
   const children = new Map<number, WbsTask[]>();
   for (const task of tasks) {
