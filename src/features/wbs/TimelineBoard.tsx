@@ -25,7 +25,7 @@ type DragSession = {
 };
 type ContextMenuState = { task: WbsTask; x: number; y: number };
 
-export function TimelineBoard({ tasks, allTasks = tasks, milestones, users, projects, groupBy, countryCode, selectedId, pastMissingTaskIds = new Set(), onSelect, onCreateSubtask, onShowHistory, onRecordProgress, onSelectMilestone, onScheduleChange }: {
+export function TimelineBoard({ tasks, allTasks = tasks, milestones, users, projects, groupBy, countryCode, pastMissingTaskIds = new Set(), onEdit, onCreateSubtask, onShowHistory, onRecordProgress, onSelectMilestone, onScheduleChange }: {
   tasks: WbsTask[];
   allTasks?: WbsTask[];
   milestones: Milestone[];
@@ -33,9 +33,8 @@ export function TimelineBoard({ tasks, allTasks = tasks, milestones, users, proj
   projects: Project[];
   groupBy: WbsGroupBy;
   countryCode: string;
-  selectedId: number | null;
   pastMissingTaskIds?: Set<number>;
-  onSelect: (task: WbsTask) => void;
+  onEdit: (task: WbsTask) => void;
   onCreateSubtask: (task: WbsTask) => void;
   onShowHistory: (task: WbsTask) => void;
   onRecordProgress: (task: WbsTask) => void;
@@ -91,7 +90,6 @@ export function TimelineBoard({ tasks, allTasks = tasks, milestones, users, proj
 
   function openContextMenu(event: React.MouseEvent | React.KeyboardEvent, task: WbsTask) {
     event.preventDefault();
-    onSelect(task);
     const keyboard = "key" in event;
     const rect = event.currentTarget.getBoundingClientRect();
     const sourceX = keyboard ? rect.left + 24 : event.clientX;
@@ -99,7 +97,7 @@ export function TimelineBoard({ tasks, allTasks = tasks, milestones, users, proj
     setContextMenu({
       task,
       x: Math.min(sourceX, window.innerWidth - 220),
-      y: Math.min(sourceY, window.innerHeight - 140),
+      y: Math.min(sourceY, window.innerHeight - 190),
     });
   }
 
@@ -207,7 +205,6 @@ export function TimelineBoard({ tasks, allTasks = tasks, milestones, users, proj
     };
     dragRef.current = session;
     element.classList.add("dragging");
-    onSelect(task);
   }
 
   async function clickDuration(task: WbsTask, amount: number) {
@@ -257,13 +254,12 @@ export function TimelineBoard({ tasks, allTasks = tasks, milestones, users, proj
             const scheduleAssigned = task.scheduleAssigned !== false;
             const left = scheduleAssigned ? dayDifference(range.start, task.plannedStart) * DAY_WIDTH : 0;
             const width = scheduleAssigned ? Math.max(DAY_WIDTH, (dayDifference(task.plannedStart, task.plannedEnd) + 1) * DAY_WIDTH) : 0;
-            const selected = selectedId === task.id;
             const hasChildren = allTasks.some((candidate) => candidate.parentTaskId === task.id);
             const plannedProgress = expectedProgress(task, today, currentDayCheckpoint());
             const health = progressHealth(task, today);
-            return <div className={`roadmap-row ${selected ? "selected" : ""} ${hasChildren ? "parent-task" : ""} ${!scheduleAssigned ? "schedule-unassigned" : ""}`} key={task.id} onContextMenu={(event) => openContextMenu(event, task)} onKeyDown={(event) => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) openContextMenu(event, task); }}>
-              <button className="task-info" style={{ "--task-depth": depth } as React.CSSProperties} aria-pressed={selected} onClick={() => onSelect(task)}>
-                <span className="task-title-line"><strong>{depth > 0 && <span className="task-branch" aria-hidden="true">↳</span>}{task.title}</strong>{selected && <span className="task-selection-badge">選択中</span>}</span>
+            return <div className={`roadmap-row ${hasChildren ? "parent-task" : ""} ${!scheduleAssigned ? "schedule-unassigned" : ""}`} key={task.id} onContextMenu={(event) => openContextMenu(event, task)} onKeyDown={(event) => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) openContextMenu(event, task); }}>
+              <button className="task-info" style={{ "--task-depth": depth } as React.CSSProperties} onClick={() => onEdit(task)} aria-label={`${task.title}を編集`}>
+                <span className="task-title-line"><strong>{depth > 0 && <span className="task-branch" aria-hidden="true">↳</span>}{task.title}</strong></span>
                 <small>{!scheduleAssigned ? "日程未割り当て" : task.finalized ? "確定" : "編集中"} · {task.parentTaskTitle ? `親: ${task.parentTaskTitle} · ` : ""}{task.ownerUserName ?? "責任者未設定"}</small>
               </button>
               <span className={`status-cell ${task.status}`}>{scheduleAssigned ? statusLabel(task.status) : "日程未設定"}</span>
@@ -274,7 +270,7 @@ export function TimelineBoard({ tasks, allTasks = tasks, milestones, users, proj
                   const approvalText = approval.state === "complete" ? "承認済み" : approval.state === "urgent" ? "本日中に承認対応" : "承認待ち";
                   return <span key={leave.id} className={`task-leave-marker ${leave.unit} ${approval.state}`} style={{ left: dayDifference(range.start, leave.date) * DAY_WIDTH }} title={`${task.ownerUserName ?? "担当者"}：${leave.date} ${leaveUnitLabel(leave.unit)}（${leave.type === "planned" ? "計画休" : "計画外"}・${approvalText}）${leave.reason ? ` ${leave.reason}` : ""}`} aria-label={`${task.ownerUserName ?? "担当者"}は${leave.date}に${leaveUnitLabel(leave.unit)}、${approvalText}`}><i aria-hidden="true">{approval.state === "urgent" ? "!" : leave.unit === "full_day" ? "休" : leave.unit === "morning" ? "午" : "後"}</i></span>;
                 })}
-                {!scheduleAssigned ? <button type="button" className="schedule-assignment-callout" onClick={() => onSelect(task)} aria-label={`${task.title}の日程を入力する`}><strong>日程を入力</strong><span>開始予定日と営業日数が未設定です</span></button> : <div className={`timeline-bar ${task.status} ${health} ${hasChildren ? "has-children" : ""}`} style={{ left, width }}>
+                {!scheduleAssigned ? <button type="button" className="schedule-assignment-callout" onClick={() => onEdit(task)} aria-label={`${task.title}の日程を入力する`}><strong>日程を入力</strong><span>開始予定日と営業日数が未設定です</span></button> : <div className={`timeline-bar ${task.status} ${health} ${hasChildren ? "has-children" : ""}`} style={{ left, width }}>
                   <button className="resize-handle left" aria-label={`${task.title}の営業日数を1日減らす。ドラッグで開始側を調整`} onPointerDown={(event) => begin(event, task, "left")} onClick={() => void clickDuration(task, -1)} onKeyDown={(event) => void keyboardAdjust(event, task, "left")}>−</button>
                   <button className="bar-body" title={`実績 ${task.progress}% / 今日の予定 ${plannedProgress}%（点線）`} onPointerDown={(event) => begin(event, task, "move")} onKeyDown={(event) => void keyboardAdjust(event, task, "move")}><i className="actual-progress" style={{ width: `${task.progress}%` }} /><i className="planned-progress" style={{ left: `${plannedProgress}%` }} /><span>{task.title} · {task.progress}%</span></button>
                   <button className="resize-handle right" aria-label={`${task.title}の営業日数を1日増やす。ドラッグで終了側を調整`} onPointerDown={(event) => begin(event, task, "right")} onClick={() => void clickDuration(task, 1)} onKeyDown={(event) => void keyboardAdjust(event, task, "right")}>＋</button>
@@ -287,6 +283,7 @@ export function TimelineBoard({ tasks, allTasks = tasks, milestones, users, proj
     </div>
     <div className="roadmap-help"><strong>横にスクロールして期間を確認</strong><span>中央をドラッグ：開始日を移動</span><span>左右端をドラッグ：営業日数を変更</span><span>← → キーでも調整可能</span></div>
     {contextMenu && <div className="task-context-menu" ref={contextMenuRef} role="menu" aria-label={`${contextMenu.task.title}の操作`} style={{ left: contextMenu.x, top: contextMenu.y }}>
+      <button role="menuitem" onClick={() => { const task = contextMenu.task; setContextMenu(null); onEdit(task); }}>タスクを編集</button>
       {dailyProgressActionLabel(contextMenu.task, allTasks.some((candidate) => candidate.parentTaskId === contextMenu.task.id), pastMissingTaskIds.has(contextMenu.task.id)) && <button role="menuitem" onClick={() => { const task = contextMenu.task; setContextMenu(null); onRecordProgress(task); }}>{dailyProgressActionLabel(contextMenu.task, false, pastMissingTaskIds.has(contextMenu.task.id))}</button>}
       <button role="menuitem" onClick={() => { const task = contextMenu.task; setContextMenu(null); onShowHistory(task); }}>作業経緯を表示</button>
       <button role="menuitem" onClick={() => { const task = contextMenu.task; setContextMenu(null); onCreateSubtask(task); }}>＋ サブタスクを追加</button>

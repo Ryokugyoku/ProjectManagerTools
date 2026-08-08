@@ -27,7 +27,7 @@ const task: WbsTask = {
   finalized: false,
 };
 
-function render(selectedId: number | null) {
+function render() {
   return renderToStaticMarkup(<TimelineBoard
     tasks={[task]}
     milestones={[]}
@@ -35,8 +35,7 @@ function render(selectedId: number | null) {
     projects={[]}
     groupBy="project"
     countryCode="JP"
-    selectedId={selectedId}
-    onSelect={vi.fn()}
+    onEdit={vi.fn()}
     onCreateSubtask={vi.fn()}
     onShowHistory={vi.fn()}
     onRecordProgress={vi.fn()}
@@ -45,26 +44,18 @@ function render(selectedId: number | null) {
   />);
 }
 
-describe("WBSロードマップの選択表示", () => {
-  it("編集中のタスクを選択すると行、文言、ARIAで選択済みと示す", () => {
-    const markup = render(task.id);
+describe("WBSロードマップのタスク操作", () => {
+  it("タスク名から編集でき、DETAILの選択表示を持たない", () => {
+    const markup = render();
 
-    expect(markup).toMatch(/class="roadmap-row selected\s*"/);
-    expect(markup).toContain('aria-pressed="true"');
-    expect(markup).toContain('class="task-selection-badge">選択中</span>');
+    expect(markup).toContain('aria-label="選択表示を確認するを編集"');
+    expect(markup).not.toContain("task-selection-badge");
+    expect(markup).not.toContain("選択中");
     expect(markup).toContain("編集中");
   });
 
-  it("未選択のタスクには選択中表示を付けない", () => {
-    const markup = render(null);
-
-    expect(markup).toMatch(/class="roadmap-row\s+"/);
-    expect(markup).toContain('aria-pressed="false"');
-    expect(markup).not.toContain("task-selection-badge");
-  });
-
   it("日付セルはヘッダーだけに描画し、各タスク行では共有背景を使う", () => {
-    const markup = render(null);
+    const markup = render();
     const dayColumns = markup.match(/class="timeline-day/g) ?? [];
 
     expect(dayColumns).toHaveLength(42);
@@ -78,10 +69,10 @@ describe("WBSロードマップの選択表示", () => {
     const child = { ...task, id: 2, title: "子", parentTaskId: 1, parentTaskTitle: task.title };
     const markup = renderToStaticMarkup(<TimelineBoard {...{
       tasks: [task], allTasks: [task, child], milestones: [], users: [], projects: [], groupBy: "project" as const,
-      countryCode: "JP", selectedId: null, onSelect: vi.fn(), onCreateSubtask: vi.fn(), onShowHistory: vi.fn(),
+      countryCode: "JP", onEdit: vi.fn(), onCreateSubtask: vi.fn(), onShowHistory: vi.fn(),
       onRecordProgress: vi.fn(), onSelectMilestone: vi.fn(), onScheduleChange: vi.fn(),
     }} />);
-    expect(markup).toContain('roadmap-row  parent-task');
+    expect(markup).toContain('roadmap-row parent-task');
     expect(markup).toContain('timeline-bar in_progress untracked has-children');
   });
 
@@ -92,7 +83,7 @@ describe("WBSロードマップの選択表示", () => {
     ] };
     const markup = renderToStaticMarkup(<TimelineBoard {...{
       tasks: [withLeaves], milestones: [], users: [], projects: [], groupBy: "project" as const,
-      countryCode: "JP", selectedId: null, onSelect: vi.fn(), onCreateSubtask: vi.fn(), onShowHistory: vi.fn(),
+      countryCode: "JP", onEdit: vi.fn(), onCreateSubtask: vi.fn(), onShowHistory: vi.fn(),
       onRecordProgress: vi.fn(), onSelectMilestone: vi.fn(), onScheduleChange: vi.fn(),
     }} />);
     expect(markup).toContain("task-leave-marker morning");
@@ -105,7 +96,7 @@ describe("WBSロードマップの選択表示", () => {
   it("日程未割り当てのサブタスクはバーの代わりに入力導線を示す", () => {
     const markup = renderToStaticMarkup(<TimelineBoard {...{
       tasks: [{ ...task, scheduleAssigned: false }], milestones: [], users: [], projects: [], groupBy: "project" as const,
-      countryCode: "JP", selectedId: null, onSelect: vi.fn(), onCreateSubtask: vi.fn(), onShowHistory: vi.fn(),
+      countryCode: "JP", onEdit: vi.fn(), onCreateSubtask: vi.fn(), onShowHistory: vi.fn(),
       onRecordProgress: vi.fn(), onSelectMilestone: vi.fn(), onScheduleChange: vi.fn(),
     }} />);
     expect(markup).toContain("日程未割り当て");

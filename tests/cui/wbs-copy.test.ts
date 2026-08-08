@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const appSource = readFileSync(new URL("../../src/App.tsx", import.meta.url), "utf8");
+const timelineSource = readFileSync(new URL("../../src/features/wbs/TimelineBoard.tsx", import.meta.url), "utf8");
 
 describe("WBSの操作文言", () => {
   it("ロードマップへのタスク追加とサブタスク追加を区別する", () => {
@@ -33,10 +34,18 @@ describe("WBSの操作文言", () => {
   });
 
   it("親の進捗と作業経緯を段階的に集約表示する", () => {
-    expect(appSource).toContain("子タスクからの進捗");
+    expect(timelineSource).toContain("子タスクから自動集計");
     expect(appSource).toContain("配下を含む");
     expect(appSource).toContain("親自身のみ");
     expect(appSource).toContain("さらに${filtered.length - 8}件を表示");
+  });
+
+  it("DETAILドロワーを使わず右クリックからタスクを編集する", () => {
+    expect(appSource).not.toContain('className="task-drawer"');
+    expect(appSource).not.toContain("DETAIL");
+    expect(appSource).not.toContain('aria-label="進捗率" type="range"');
+    expect(timelineSource).toContain(">タスクを編集</button>");
+    expect(timelineSource).toContain("onEdit(task)");
   });
 
   it("同階層から完了前提タスクを選べる", () => {
