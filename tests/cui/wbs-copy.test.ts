@@ -28,7 +28,14 @@ describe("WBSの操作文言", () => {
     expect(appSource).toContain("buildAncestorEndExtensions");
     expect(taskFormSource).toContain("親日程を延長して登録");
     expect(appSource).not.toContain("window.confirm");
-    expect(appSource).toContain("サブタスク追加による親日程の調整");
+    expect(appSource).toContain("サブタスク追加の理由");
+    expect(appSource).toContain("changeReasonRequired");
+  });
+
+  it("確定・リスケ・遅延の理由区分を入力できる", () => {
+    expect(appSource).toContain("理由の区分");
+    expect(appSource).toContain("REASON_CATEGORY_OPTIONS");
+    expect(appSource).toContain("親子の状態を確定");
   });
 
   it("WBSの削除確認をTauri内で操作できる", () => {

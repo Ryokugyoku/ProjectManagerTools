@@ -68,8 +68,8 @@ describe("WBS data methods", () => {
   });
 
   it("loads the exact day's work and the latest cumulative progress up to that date", async () => {
-    db.select.mockResolvedValue([{ task_id: 7, daily_progress: 15, cumulative_progress: 55, note: "レビュー完了", latest_history_type: "progress", latest_history_details: "今日 +15% / 累計 55%", reschedule_reason: "顧客都合", delay_reason: "回答待ち", early_start_reason: "先行調査" }]);
-    expect(await listDailyProgressSnapshots("2026-08-07")).toEqual([{ taskId: 7, date: "2026-08-07", dailyProgress: 15, cumulativeProgress: 55, note: "レビュー完了", latestHistoryType: "progress", latestHistoryDetails: "今日 +15% / 累計 55%", rescheduleReason: "顧客都合", delayReason: "回答待ち", earlyStartReason: "先行調査" }]);
+    db.select.mockResolvedValue([{ task_id: 7, daily_progress: 15, cumulative_progress: 55, note: "レビュー完了", latest_history_type: "progress", latest_history_details: "今日 +15% / 累計 55%", reschedule_reason: "顧客都合", reschedule_reason_category: "external_dependency", delay_reason: "回答待ち", delay_reason_category: "requirement_change", early_start_reason: "先行調査" }]);
+    expect(await listDailyProgressSnapshots("2026-08-07")).toEqual([{ taskId: 7, date: "2026-08-07", dailyProgress: 15, cumulativeProgress: 55, note: "レビュー完了", latestHistoryType: "progress", latestHistoryDetails: "今日 +15% / 累計 55%", rescheduleReason: "顧客都合", rescheduleReasonCategory: "external_dependency", delayReason: "回答待ち", delayReasonCategory: "requirement_change", earlyStartReason: "先行調査" }]);
     expect(db.select).toHaveBeenCalledWith(expect.stringContaining("previous.entry_date<=$1"), ["2026-08-07"]);
     expect(db.select).toHaveBeenCalledWith(expect.stringContaining("exact_log.entry_date=$1"), ["2026-08-07"]);
     expect(db.select).toHaveBeenCalledWith(expect.stringContaining("date(history.occurred_at, 'localtime')=$1"), ["2026-08-07"]);
@@ -80,7 +80,7 @@ describe("WBS data methods", () => {
     db.select.mockResolvedValue([{ task_id: 7, daily_progress: null, cumulative_progress: 0, note: null, latest_history_type: null, latest_history_details: null, reschedule_reason: null, delay_reason: null }]);
     expect(await listDailyProgressSnapshots("2026-08-07")).toEqual([{
       taskId: 7, date: "2026-08-07", dailyProgress: null, cumulativeProgress: 0,
-      note: "", latestHistoryType: null, latestHistoryDetails: "", rescheduleReason: "", delayReason: "", earlyStartReason: "",
+      note: "", latestHistoryType: null, latestHistoryDetails: "", rescheduleReason: "", rescheduleReasonCategory: "", delayReason: "", delayReasonCategory: "", earlyStartReason: "",
     }]);
   });
 
@@ -109,14 +109,25 @@ describe("WBS data methods", () => {
     await createWbsTask({ ...task, projectId: 4, parentTaskId: 7 });
     expect(db.execute).toHaveBeenCalledWith(expect.stringContaining("parent_task_id"), expect.arrayContaining([4, 7]));
     expect(db.execute.mock.calls[0][1]?.[11]).toBe(1);
-    expect(db.execute).toHaveBeenCalledWith(expect.stringContaining("'created'"), [7, "サブタスク「設計」を追加しました。"]);
+    expect(db.execute).toHaveBeenCalledWith(expect.stringContaining("'created'"), [7, "", "", "サブタスク「設計」を追加しました。"]);
 
     db.select.mockResolvedValue([{ parent_project_id: 5, is_descendant: 0 }]);
     await expect(createWbsTask({ ...task, projectId: 4, parentTaskId: 7 })).rejects.toThrow("同じ案件");
   });
 
+  it("stores the category and reason for a scope-changing subtask", async () => {
+    db.select.mockResolvedValue([{ parent_project_id: 4, is_descendant: 0 }]);
+    await createWbsTask({ ...task, projectId: 4, parentTaskId: 7 }, { category: "scope_omission", reason: " 設計時の確認項目が不足していた " });
+    expect(db.execute).toHaveBeenLastCalledWith(expect.stringContaining("reason_category"), [7, "scope_omission", "設計時の確認項目が不足していた", "サブタスク「設計」を追加しました。"]);
+  });
+
+  it("rejects a categorized subtask without a reason before writing", async () => {
+    await expect(createWbsTask({ ...task, projectId: 4, parentTaskId: 7 }, { category: "scope_omission", reason: " " })).rejects.toThrow("サブタスク追加の理由");
+    expect(db.execute).not.toHaveBeenCalled();
+  });
+
   it("rejects finalizing a schedule-unassigned task", async () => {
-    db.select.mockResolvedValue([{ schedule_assigned: 0 }]);
+    db.select.mockResolvedValue([{ id: 7, title: "親", schedule_assigned: 1 }, { id: 8, title: "日程未設定の子", schedule_assigned: 0 }]);
     await expect(finalizeWbsTask(7)).rejects.toThrow("日程を入力してから");
     expect(db.execute).not.toHaveBeenCalled();
   });
@@ -251,9 +262,9 @@ describe("WBS data methods", () => {
     db.select.mockResolvedValueOnce([stored]).mockResolvedValueOnce([]);
     await expect(saveDailyProgress(7, "2026-08-07", 5, "", "")).rejects.toThrow("理由");
     db.select.mockResolvedValueOnce([stored]).mockResolvedValueOnce([]);
-    await saveDailyProgress(7, "2026-08-07", 5, "確認中", "仕様確認待ち");
+    await saveDailyProgress(7, "2026-08-07", 5, "確認中", "仕様確認待ち", "", "requirement_change");
     expect(db.execute).toHaveBeenCalledTimes(4);
-    expect(db.execute).toHaveBeenLastCalledWith(expect.stringContaining("'delay'"), [7, "仕様確認待ち", "2026-08-07時点の累計進捗 25%（計画 50%）"]);
+    expect(db.execute).toHaveBeenLastCalledWith(expect.stringContaining("'delay'"), [7, "requirement_change", "仕様確認待ち", "2026-08-07時点の累計進捗 25%（計画 50%）"]);
   });
 
   it("requires and stores a reason when progress starts before prerequisites complete", async () => {
@@ -288,34 +299,36 @@ describe("WBS data methods", () => {
   });
 
   it("finalizes tasks and persists reasoned schedule history", async () => {
-    db.select.mockResolvedValueOnce([{ schedule_assigned: 1 }]);
+    db.select.mockResolvedValueOnce([{ id: 7, title: "親", schedule_assigned: 1 }, { id: 8, title: "子", schedule_assigned: 1 }]);
     await finalizeWbsTask(7);
-    expect(db.execute).toHaveBeenCalledTimes(2);
+    expect(db.execute).toHaveBeenCalledTimes(1);
+    expect(db.execute).toHaveBeenCalledWith(expect.stringContaining("WITH RECURSIVE task_tree"), [7]);
     db.execute.mockClear();
-    await expect(saveScheduleChanges([{ taskId: 7, plannedStart: "2026-08-07", plannedEnd: "2026-08-14", businessDays: 5 }], " ")).rejects.toThrow("リスケ理由");
+    await expect(saveScheduleChanges([{ taskId: 7, plannedStart: "2026-08-07", plannedEnd: "2026-08-14", businessDays: 5 }], " ", "requirement_change")).rejects.toThrow("リスケ理由");
+    await expect(saveScheduleChanges([{ taskId: 7, plannedStart: "2026-08-07", plannedEnd: "2026-08-14", businessDays: 5 }], "要件変更", "")).rejects.toThrow("区分");
     db.select.mockResolvedValue([{ planned_start: "2026-08-06", planned_end: "2026-08-13" }]);
-    await saveScheduleChanges([{ taskId: 7, plannedStart: "2026-08-07", plannedEnd: "2026-08-14", businessDays: 5 }], " 顧客都合 ");
+    await saveScheduleChanges([{ taskId: 7, plannedStart: "2026-08-07", plannedEnd: "2026-08-14", businessDays: 5 }], " 顧客都合 ", "external_dependency");
     expect(db.execute).toHaveBeenCalledTimes(2);
-    expect(db.execute).toHaveBeenLastCalledWith(expect.stringContaining("'rescheduled'"), [7, "顧客都合", "2026-08-06〜2026-08-13 → 2026-08-07〜2026-08-14"]);
+    expect(db.execute).toHaveBeenLastCalledWith(expect.stringContaining("'rescheduled'"), [7, "external_dependency", "顧客都合", "2026-08-06〜2026-08-13 → 2026-08-07〜2026-08-14"]);
     db.execute.mockClear();
-    await saveScheduleChanges([{ taskId: 8, plannedStart: "2026-08-08", plannedEnd: "2026-08-15", businessDays: 5, historyContext: "親タスク「親」の移動に連動" }], " 顧客都合 ");
-    expect(db.execute).toHaveBeenLastCalledWith(expect.stringContaining("'rescheduled'"), [8, "顧客都合", "親タスク「親」の移動に連動。2026-08-06〜2026-08-13 → 2026-08-08〜2026-08-15"]);
+    await saveScheduleChanges([{ taskId: 8, plannedStart: "2026-08-08", plannedEnd: "2026-08-15", businessDays: 5, historyContext: "親タスク「親」の移動に連動" }], " 顧客都合 ", "external_dependency");
+    expect(db.execute).toHaveBeenLastCalledWith(expect.stringContaining("'rescheduled'"), [8, "external_dependency", "顧客都合", "親タスク「親」の移動に連動。2026-08-06〜2026-08-13 → 2026-08-08〜2026-08-15"]);
   });
 
   it("rejects schedule changes for a missing task", async () => {
     db.select.mockResolvedValueOnce([]);
-    await expect(saveScheduleChanges([{ taskId: 7, plannedStart: "2026-08-07", plannedEnd: "2026-08-14", businessDays: 5 }], "顧客都合")).rejects.toThrow("変更対象のタスクが見つかりません");
+    await expect(saveScheduleChanges([{ taskId: 7, plannedStart: "2026-08-07", plannedEnd: "2026-08-14", businessDays: 5 }], "顧客都合", "external_dependency")).rejects.toThrow("変更対象のタスクが見つかりません");
   });
 
   it("loads work history in chronological order", async () => {
-    db.select.mockResolvedValue([{ id: 2, task_id: 7, event_kind: "delay", reason: "待ち", details: "20%", occurred_at: "2026-08-06T01:00:00Z" }]);
-    expect(await listTaskActivity(7)).toEqual([{ id: 2, taskId: 7, type: "delay", reason: "待ち", details: "20%", occurredAt: "2026-08-06T01:00:00Z" }]);
+    db.select.mockResolvedValue([{ id: 2, task_id: 7, owner_user_id: 3, event_kind: "delay", reason_category: "external_dependency", reason: "待ち", details: "20%", occurred_at: "2026-08-06T01:00:00Z" }]);
+    expect(await listTaskActivity(7)).toEqual([{ id: 2, taskId: 7, ownerUserId: 3, type: "delay", reasonCategory: "external_dependency", reason: "待ち", details: "20%", occurredAt: "2026-08-06T01:00:00Z" }]);
     expect(db.select).toHaveBeenCalledWith(expect.stringContaining("ORDER BY occurred_at ASC"), [7]);
   });
 
   it("loads the selected task and descendant history with source context", async () => {
-    db.select.mockResolvedValue([{ id: 3, task_id: 8, event_kind: "progress", reason: "", details: "累計 50%", occurred_at: "2026-08-07T01:00:00Z", task_title: "実装", depth: 1 }]);
-    expect(await listTaskTreeActivity(7)).toEqual([{ id: 3, taskId: 8, type: "progress", reason: "", details: "累計 50%", occurredAt: "2026-08-07T01:00:00Z", taskTitle: "実装", depth: 1 }]);
+    db.select.mockResolvedValue([{ id: 3, task_id: 8, owner_user_id: null, event_kind: "progress", reason_category: "", reason: "", details: "累計 50%", occurred_at: "2026-08-07T01:00:00Z", task_title: "実装", depth: 1 }]);
+    expect(await listTaskTreeActivity(7)).toEqual([{ id: 3, taskId: 8, ownerUserId: null, type: "progress", reasonCategory: "", reason: "", details: "累計 50%", occurredAt: "2026-08-07T01:00:00Z", taskTitle: "実装", depth: 1 }]);
     expect(db.select).toHaveBeenCalledWith(expect.stringContaining("WITH RECURSIVE task_tree"), [7]);
   });
 });

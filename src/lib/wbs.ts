@@ -1,5 +1,6 @@
 import Database from "@tauri-apps/plugin-sql";
 import { deriveParentProgress, expectedProgress } from "./wbsPlanning";
+import { requireReasonCategory, type ReasonCategory } from "./reasonCategories";
 
 const DATABASE_URL = "sqlite:project-manager-v2.db";
 
@@ -73,7 +74,7 @@ export type AppSettings = {
   dailyReportAncestorDepth: number;
 };
 export type ActivityEventKind = "created" | "finalized" | "rescheduled" | "progress" | "delay";
-export type ActivityEvent = { id: number; taskId: number; type: ActivityEventKind; reason: string; details: string; occurredAt: string };
+export type ActivityEvent = { id: number; taskId: number; ownerUserId: number | null; type: ActivityEventKind; reasonCategory: ReasonCategory | ""; reason: string; details: string; occurredAt: string };
 export type TaskTreeHistoryEntry = ActivityEvent & { taskTitle: string; depth: number };
 export type DailyProgressSnapshot = {
   taskId: number;
@@ -84,7 +85,9 @@ export type DailyProgressSnapshot = {
   latestHistoryType: ActivityEventKind | null;
   latestHistoryDetails: string;
   rescheduleReason: string;
+  rescheduleReasonCategory?: ReasonCategory | "";
   delayReason: string;
+  delayReasonCategory?: ReasonCategory | "";
   earlyStartReason?: string;
 };
 
@@ -102,7 +105,7 @@ type WbsTaskRow = {
   latest_delay_reason: string | null;
 };
 type WbsDependencyRow = { task_id: number; prerequisite_task_id: number; prerequisite_task_title: string; prerequisite_task_status: WbsStatus };
-type ActivityEventRow = { id: number; task_id: number; event_kind: ActivityEventKind; reason: string; details: string; occurred_at: string };
+type ActivityEventRow = { id: number; task_id: number; owner_user_id: number | null; event_kind: ActivityEventKind; reason_category: ReasonCategory | ""; reason: string; details: string; occurred_at: string };
 type TaskTreeHistoryRow = ActivityEventRow & { task_title: string; depth: number };
 type UserRow = {
   id: number; name: string; email: string; birthday: string | null;
@@ -181,7 +184,8 @@ export async function listDailyProgressSnapshots(date: string): Promise<DailyPro
   const rows = await db.select<Array<{
     task_id: number; daily_progress: number | null; cumulative_progress: number; note: string | null;
     latest_history_type: ActivityEventKind | null; latest_history_details: string | null;
-    reschedule_reason: string | null; delay_reason: string | null; early_start_reason: string | null;
+    reschedule_reason: string | null; reschedule_reason_category: ReasonCategory | "" | null;
+    delay_reason: string | null; delay_reason_category: ReasonCategory | "" | null; early_start_reason: string | null;
   }>>(`
     SELECT w.id AS task_id, exact_log.daily_progress, exact_log.note, exact_log.early_start_reason,
       COALESCE(
@@ -202,10 +206,18 @@ export async function listDailyProgressSnapshots(date: string): Promise<DailyPro
         WHERE history.task_id=w.id AND history.event_kind='rescheduled'
           AND date(history.occurred_at, 'localtime')=$1
         ORDER BY history.occurred_at DESC, history.id DESC LIMIT 1) AS reschedule_reason,
+      (SELECT history.reason_category FROM task_activity_events history
+        WHERE history.task_id=w.id AND history.event_kind='rescheduled'
+          AND date(history.occurred_at, 'localtime')=$1
+        ORDER BY history.occurred_at DESC, history.id DESC LIMIT 1) AS reschedule_reason_category,
       (SELECT history.reason FROM task_activity_events history
         WHERE history.task_id=w.id AND history.event_kind='delay'
           AND date(history.occurred_at, 'localtime')=$1
-        ORDER BY history.occurred_at DESC, history.id DESC LIMIT 1) AS delay_reason
+        ORDER BY history.occurred_at DESC, history.id DESC LIMIT 1) AS delay_reason,
+      (SELECT history.reason_category FROM task_activity_events history
+        WHERE history.task_id=w.id AND history.event_kind='delay'
+          AND date(history.occurred_at, 'localtime')=$1
+        ORDER BY history.occurred_at DESC, history.id DESC LIMIT 1) AS delay_reason_category
     FROM wbs_tasks w
     LEFT JOIN task_progress_entries exact_log
       ON exact_log.task_id=w.id AND exact_log.entry_date=$1
@@ -220,7 +232,9 @@ export async function listDailyProgressSnapshots(date: string): Promise<DailyPro
     latestHistoryType: row.latest_history_type,
     latestHistoryDetails: row.latest_history_details ?? "",
     rescheduleReason: row.reschedule_reason ?? "",
+    rescheduleReasonCategory: row.reschedule_reason_category ?? "",
     delayReason: row.delay_reason ?? "",
+    delayReasonCategory: row.delay_reason_category ?? "",
     earlyStartReason: row.early_start_reason ?? "",
   }));
 }
@@ -234,8 +248,11 @@ export async function listRecordedProgressDates(taskId: number): Promise<string[
   return rows.map((row) => row.entry_date);
 }
 
-export async function createWbsTask(input: WbsTaskInput): Promise<void> {
+export async function createWbsTask(input: WbsTaskInput, changeReason?: { category: ReasonCategory; reason: string }): Promise<void> {
   validateTask(input);
+  const normalizedChangeReason = changeReason?.reason.trim() ?? "";
+  const changeReasonCategory = changeReason ? requireReasonCategory(changeReason.category) : "";
+  if (changeReason && !normalizedChangeReason) throw new Error("サブタスク追加の理由を入力してください。");
   const db = await database();
   await validateProjectAssignment(db, input.projectId, input.ownerUserId);
   await validateParentTask(db, null, input.projectId, input.parentTaskId);
@@ -251,8 +268,8 @@ export async function createWbsTask(input: WbsTaskInput): Promise<void> {
   const taskId = Number(result.lastInsertId);
   await replaceTaskDependencies(db, taskId, prerequisiteIds);
   if (input.parentTaskId !== null) {
-    await db.execute("INSERT INTO task_activity_events (task_id, event_kind, details) VALUES ($1, 'created', $2)", [
-      input.parentTaskId, `サブタスク「${input.title.trim()}」を追加しました。`,
+    await db.execute("INSERT INTO task_activity_events (task_id, owner_user_id, event_kind, reason_category, reason, details) SELECT id, owner_user_id, 'created', $2, $3, $4 FROM wbs_tasks WHERE id=$1", [
+      input.parentTaskId, changeReasonCategory, normalizedChangeReason, `サブタスク「${input.title.trim()}」を追加しました。`,
     ]);
   }
 }
@@ -287,16 +304,27 @@ export async function deleteWbsTask(id: number): Promise<void> {
 
 export async function finalizeWbsTask(taskId: number): Promise<void> {
   const db = await database();
-  const rows = await db.select<Array<{ schedule_assigned: number }>>("SELECT schedule_assigned FROM wbs_tasks WHERE id=$1", [taskId]);
+  const rows = await db.select<Array<{ id: number; title: string; schedule_assigned: number }>>(`WITH RECURSIVE task_tree(id, title, schedule_assigned) AS (
+      SELECT id, title, schedule_assigned FROM wbs_tasks WHERE id=$1
+      UNION ALL
+      SELECT child.id, child.title, child.schedule_assigned
+      FROM wbs_tasks child JOIN task_tree ON child.parent_task_id=task_tree.id
+    ) SELECT id, title, schedule_assigned FROM task_tree ORDER BY id`, [taskId]);
   if (!rows[0]) throw new Error("確定するタスクが見つかりません。");
-  if (rows[0].schedule_assigned !== 1) throw new Error("日程を入力してからタスクの状態を確定してください。");
-  await db.execute("UPDATE wbs_tasks SET finalized=1, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id=$1", [taskId]);
-  await db.execute("INSERT INTO task_activity_events (task_id, event_kind, details) VALUES ($1, 'finalized', $2)", [taskId, "タスクの計画を確定しました。"]);
+  const unassigned = rows.find((task) => task.schedule_assigned !== 1);
+  if (unassigned) throw new Error(`「${unassigned.title}」の日程を入力してから、親子の状態を確定してください。`);
+  await db.execute(`WITH RECURSIVE task_tree(id) AS (
+      SELECT id FROM wbs_tasks WHERE id=$1
+      UNION ALL
+      SELECT child.id FROM wbs_tasks child JOIN task_tree ON child.parent_task_id=task_tree.id
+    ) UPDATE wbs_tasks SET finalized=1, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE id IN (SELECT id FROM task_tree) AND finalized=0`, [taskId]);
 }
 
-export async function saveScheduleChanges(changes: Array<{ taskId: number; plannedStart: string; plannedEnd: string; businessDays: number; historyContext?: string }>, reason: string): Promise<void> {
+export async function saveScheduleChanges(changes: Array<{ taskId: number; plannedStart: string; plannedEnd: string; businessDays: number; historyContext?: string }>, reason: string, reasonCategory: ReasonCategory | ""): Promise<void> {
   const normalizedReason = reason.trim();
   if (!normalizedReason) throw new Error("リスケ理由を入力してください。");
+  const normalizedCategory = requireReasonCategory(reasonCategory);
   const db = await database();
   for (const change of changes) {
     const rows = await db.select<Array<{ planned_start: string; planned_end: string }>>("SELECT planned_start, planned_end FROM wbs_tasks WHERE id=$1", [change.taskId]);
@@ -306,13 +334,13 @@ export async function saveScheduleChanges(changes: Array<{ taskId: number; plann
       updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id=$4`, [change.plannedStart, change.plannedEnd, change.businessDays, change.taskId]);
     const context = change.historyContext?.trim();
     const scheduleDetails = `${before.planned_start}〜${before.planned_end} → ${change.plannedStart}〜${change.plannedEnd}`;
-    await db.execute("INSERT INTO task_activity_events (task_id, event_kind, reason, details) VALUES ($1, 'rescheduled', $2, $3)", [
-      change.taskId, normalizedReason, context ? `${context}。${scheduleDetails}` : scheduleDetails,
+    await db.execute("INSERT INTO task_activity_events (task_id, owner_user_id, event_kind, reason_category, reason, details) SELECT id, owner_user_id, 'rescheduled', $2, $3, $4 FROM wbs_tasks WHERE id=$1", [
+      change.taskId, normalizedCategory, normalizedReason, context ? `${context}。${scheduleDetails}` : scheduleDetails,
     ]);
   }
 }
 
-export async function saveDailyProgress(taskId: number, date: string, dailyProgress: number, note: string, delayReason: string, earlyStartReason = "") {
+export async function saveDailyProgress(taskId: number, date: string, dailyProgress: number, note: string, delayReason: string, earlyStartReason = "", delayReasonCategory: ReasonCategory | "" = "") {
   if (!Number.isFinite(dailyProgress) || dailyProgress < 0 || dailyProgress > 100) throw new Error("その日に進んだ進捗は0〜100%で入力してください。");
   const db = await database();
   const rows = await db.select<Array<{ progress: number; finalized: number; planned_start: string; planned_end: string; business_days: number; schedule_assigned: number; country_code: string; owner_user_id: number | null; previous_daily: number; child_count: number }>>(
@@ -356,6 +384,7 @@ export async function saveDailyProgress(taskId: number, date: string, dailyProgr
     ORDER BY prerequisite.planned_end, prerequisite.id
   `, [taskId]) ?? [];
   if (task.finalized === 1 && selectedProgress < expected && !normalizedReason) throw new Error("計画進捗を下回る理由を入力してください。");
+  const normalizedDelayCategory = task.finalized === 1 && selectedProgress < expected ? requireReasonCategory(delayReasonCategory) : "";
   if (dailyProgress > 0 && incompletePrerequisites.length > 0 && !normalizedEarlyStartReason) {
     throw new Error("完了前提タスクの完了前に開始した理由を入力してください。");
   }
@@ -375,17 +404,17 @@ export async function saveDailyProgress(taskId: number, date: string, dailyProgr
       actual_end=CASE WHEN $1=100 THEN COALESCE(actual_end, $2) ELSE NULL END,
       updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id=$3
   `, [totalProgress, date, taskId]);
-  await db.execute("INSERT INTO task_activity_events (task_id, event_kind, details) VALUES ($1, 'progress', $2)", [taskId, `${date} +${dailyProgress}% / 当日累計 ${selectedProgress}% / 計画 ${expected}%${note.trim() ? `\n${note.trim()}` : ""}`]);
+  await db.execute("INSERT INTO task_activity_events (task_id, owner_user_id, event_kind, details) SELECT id, owner_user_id, 'progress', $2 FROM wbs_tasks WHERE id=$1", [taskId, `${date} +${dailyProgress}% / 当日累計 ${selectedProgress}% / 計画 ${expected}%${note.trim() ? `\n${note.trim()}` : ""}`]);
   if (task.finalized === 1 && selectedProgress < expected) {
-    await db.execute("INSERT INTO task_activity_events (task_id, event_kind, reason, details) VALUES ($1, 'delay', $2, $3)", [taskId, normalizedReason, `${date}時点の累計進捗 ${selectedProgress}%（計画 ${expected}%）`]);
+    await db.execute("INSERT INTO task_activity_events (task_id, owner_user_id, event_kind, reason_category, reason, details) SELECT id, owner_user_id, 'delay', $2, $3, $4 FROM wbs_tasks WHERE id=$1", [taskId, normalizedDelayCategory, normalizedReason, `${date}時点の累計進捗 ${selectedProgress}%（計画 ${expected}%）`]);
   }
 }
 
 export async function listTaskActivity(taskId: number): Promise<ActivityEvent[]> {
   const db = await database();
-  const rows = await db.select<ActivityEventRow[]>(`SELECT id, task_id, event_kind, reason, details, occurred_at
+  const rows = await db.select<ActivityEventRow[]>(`SELECT id, task_id, owner_user_id, event_kind, reason_category, reason, details, occurred_at
     FROM task_activity_events WHERE task_id=$1 ORDER BY occurred_at ASC, id ASC`, [taskId]);
-  return rows.map((row) => ({ id: row.id, taskId: row.task_id, type: row.event_kind, reason: row.reason, details: row.details, occurredAt: row.occurred_at }));
+  return rows.map((row) => ({ id: row.id, taskId: row.task_id, ownerUserId: row.owner_user_id, type: row.event_kind, reasonCategory: row.reason_category, reason: row.reason, details: row.details, occurredAt: row.occurred_at }));
 }
 
 export async function listTaskTreeActivity(taskId: number): Promise<TaskTreeHistoryEntry[]> {
@@ -396,12 +425,12 @@ export async function listTaskTreeActivity(taskId: number): Promise<TaskTreeHist
       SELECT child.id, child.title, task_tree.depth + 1
       FROM wbs_tasks child JOIN task_tree ON child.parent_task_id=task_tree.id
     )
-    SELECT history.id, history.task_id, history.event_kind, history.reason, history.details,
+    SELECT history.id, history.task_id, history.owner_user_id, history.event_kind, history.reason_category, history.reason, history.details,
       history.occurred_at, task_tree.title AS task_title, task_tree.depth
     FROM task_tree JOIN task_activity_events history ON history.task_id=task_tree.id
     ORDER BY history.occurred_at DESC, history.id DESC`, [taskId]);
   return rows.map((row) => ({
-    id: row.id, taskId: row.task_id, type: row.event_kind, reason: row.reason,
+    id: row.id, taskId: row.task_id, ownerUserId: row.owner_user_id, type: row.event_kind, reasonCategory: row.reason_category, reason: row.reason,
     details: row.details, occurredAt: row.occurred_at, taskTitle: row.task_title, depth: row.depth,
   }));
 }

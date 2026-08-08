@@ -96,7 +96,13 @@ ON task_progress_entries (entry_date, task_id);
 CREATE TABLE IF NOT EXISTS task_activity_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id INTEGER NOT NULL REFERENCES wbs_tasks(id) ON DELETE CASCADE,
+    owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     event_kind TEXT NOT NULL CHECK (event_kind IN ('created', 'finalized', 'rescheduled', 'progress', 'delay')),
+    reason_category TEXT NOT NULL DEFAULT '' CHECK (reason_category IN (
+        '', 'scope_omission', 'requirement_addition', 'requirement_change', 'estimate_variance',
+        'technical_issue', 'external_dependency', 'resource_constraint', 'priority_change',
+        'quality_response', 'other'
+    )),
     reason TEXT NOT NULL DEFAULT '' CHECK (length(reason) <= 1000),
     details TEXT NOT NULL DEFAULT '' CHECK (length(details) <= 2000),
     occurred_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
@@ -104,6 +110,14 @@ CREATE TABLE IF NOT EXISTS task_activity_events (
 
 CREATE INDEX IF NOT EXISTS idx_task_activity_events_task_time
 ON task_activity_events (task_id, occurred_at DESC, id DESC);
+
+CREATE TRIGGER IF NOT EXISTS record_wbs_task_finalization
+AFTER UPDATE OF finalized ON wbs_tasks
+WHEN OLD.finalized = 0 AND NEW.finalized = 1
+BEGIN
+    INSERT INTO task_activity_events (task_id, owner_user_id, event_kind, details)
+    VALUES (NEW.id, NEW.owner_user_id, 'finalized', 'タスクの計画を確定しました。');
+END;
 
 CREATE TABLE IF NOT EXISTS milestones (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

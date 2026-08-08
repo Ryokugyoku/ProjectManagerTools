@@ -6,6 +6,7 @@ import {
   finalizeWbsTask, listTaskTreeActivity, saveDailyProgress, saveScheduleChanges, saveSettings, updateWbsTask,
   type AppSettings, type UserProfile, type DailyProgressSnapshot, type TaskTreeHistoryEntry, type UserLeave, type WbsStatus, type WbsTask, type ActivityEvent,
 } from "./lib/wbs";
+import { REASON_CATEGORY_OPTIONS, reasonCategoryLabel, type ReasonCategory } from "./lib/reasonCategories";
 import { buildAncestorEndExtensions, buildScheduleCascade, expectedProgress, scheduleChangesRequireReason, type ScheduleChange, type TaskSchedule } from "./lib/wbsPlanning";
 import { TimelineBoard } from "./features/wbs/TimelineBoard";
 import { businessDaysOrDefault, earliestPrerequisiteStart, missingProgressDates, parseBusinessDaysInput, requireDailyProgress, requiresEarlyStartReason, taskCreateActionLabel, type WbsTaskForm } from "./features/wbs/taskForm";
@@ -356,14 +357,25 @@ function TaskModal({ settings, projects, users, tasks, initialProjectId, initial
     () => buildAncestorEndExtensions(tasks, form.parentTaskId, end, form.title.trim() || "新しいサブタスク"),
     [end, form.parentTaskId, form.title, tasks],
   );
+  const changeReasonRequired = scheduleChangesRequireReason(tasks, ancestorExtensions);
+  const [reasonCategory, setReasonCategory] = useState<ReasonCategory | "">("");
+  const [reason, setReason] = useState("");
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     setSaving(true);
     try {
-      await createWbsTask({ ...form, businessDays, plannedEnd: end, scheduleAssigned: true });
+      const changeReason = changeReasonRequired ? { category: reasonCategory as ReasonCategory, reason } : undefined;
+      await createWbsTask({ ...form, businessDays, plannedEnd: end, scheduleAssigned: true }, changeReason);
       if (ancestorExtensions.length > 0) {
-        await saveScheduleChanges(ancestorExtensions.map((change) => ({ taskId: change.taskId, ...change.after, historyContext: change.historyContext })), "サブタスク追加による親日程の調整");
+        if (changeReasonRequired) {
+          await saveScheduleChanges(ancestorExtensions.map((change) => ({ taskId: change.taskId, ...change.after, historyContext: change.historyContext })), reason, reasonCategory);
+        } else {
+          for (const change of ancestorExtensions) {
+            const current = tasks.find((task) => task.id === change.taskId);
+            if (current) await updateWbsTask(current.id, { ...current, ...change.after, scheduleAssigned: true });
+          }
+        }
       }
       await onSaved();
     }
@@ -381,7 +393,8 @@ function TaskModal({ settings, projects, users, tasks, initialProjectId, initial
       </div>
       {businessDays >= 5 && <div className="warning" role="status"><strong>サブタスクへの分割をおすすめします</strong><span>5営業日以上のタスクです。完了条件が明確な小さなサブタスクとして分割すると、遅れを早く発見できます。</span></div>}
       {ancestorExtensions.length > 0 && <div className="warning wide" role="alert"><strong>親タスクの日程を超えます</strong><span>追加すると、{ancestorExtensions.map((change) => { const task = tasks.find((item) => item.id === change.taskId); return `${task?.title ?? "親タスク"}（${change.before.plannedEnd} → ${change.after.plannedEnd}）`; }).join("、")} の終了予定日を延長します。影響を確認のうえ、下のボタンから登録してください。</span></div>}
-      <div className="modal-actions"><button type="button" className="quiet-button" onClick={onClose}>キャンセル</button><button className="primary-button" disabled={saving || !form.title.trim()}>{taskCreateActionLabel(saving, ancestorExtensions.length)}</button></div>
+      {changeReasonRequired && <ReasonFields category={reasonCategory} reason={reason} onCategoryChange={setReasonCategory} onReasonChange={setReason} reasonLabel="サブタスク追加の理由" placeholder="確定後に作業を追加することになった背景と影響を記載してください" />}
+      <div className="modal-actions"><button type="button" className="quiet-button" onClick={onClose}>キャンセル</button><button className="primary-button" disabled={saving || !form.title.trim() || (changeReasonRequired && (!reasonCategory || !reason.trim()))}>{taskCreateActionLabel(saving, ancestorExtensions.length)}</button></div>
     </form>
   </Modal>;
 }
@@ -395,6 +408,18 @@ function TaskEditor({ task, tasks, countryCode, projects, users, onChanged, onSc
   useEffect(() => { setForm({ ...task, countryCode }); setConfirmingDelete(false); }, [task, countryCode]);
   const businessDays = businessDaysOrDefault(form.businessDays);
   const end = calculateEndDate(form.plannedStart, businessDays, countryCode);
+  const unfinalizedDescendantCount = useMemo(() => {
+    const pending = [task.id];
+    let count = 0;
+    while (pending.length > 0) {
+      const parentId = pending.pop()!;
+      for (const child of tasks.filter((candidate) => candidate.parentTaskId === parentId)) {
+        pending.push(child.id);
+        if (!child.finalized) count += 1;
+      }
+    }
+    return count;
+  }, [task.id, tasks]);
 
   async function submit(event: FormEvent) {
     event.preventDefault(); setSaving(true);
@@ -418,7 +443,7 @@ function TaskEditor({ task, tasks, countryCode, projects, users, onChanged, onSc
 
   return <form className="panel-form" onSubmit={submit}>
     <div className="task-editor-heading"><p>名称、担当、状態、日程、完了前提を設定します。</p><span className={`status-badge ${form.status}`}>{statusLabels[form.status]}</span></div>
-    <div className={`task-lock-state ${task.scheduleAssigned === false ? "schedule-unassigned" : task.finalized ? "finalized" : "draft"}`}><div><strong>{task.scheduleAssigned === false ? "日程未割り当て" : task.finalized ? "計画確定済み" : "編集中"}</strong><span>{task.scheduleAssigned === false ? "開始予定日と営業日数を入力して、ロードマップへ配置してください。" : task.finalized ? "日程変更にはロードマップ上で理由の記録が必要です。" : "確定するまで日程を自由に調整できます。"}</span></div>{!task.finalized && task.scheduleAssigned !== false && <button type="button" className="quiet-button" disabled={saving} onClick={() => void finalize()}>タスクの状態を確定</button>}</div>
+    <div className={`task-lock-state ${task.scheduleAssigned === false ? "schedule-unassigned" : task.finalized ? "finalized" : "draft"}`}><div><strong>{task.scheduleAssigned === false ? "日程未割り当て" : task.finalized ? "計画確定済み" : "編集中"}</strong><span>{task.scheduleAssigned === false ? "開始予定日と営業日数を入力して、ロードマップへ配置してください。" : task.finalized ? "日程変更にはロードマップ上で理由と区分の記録が必要です。" : unfinalizedDescendantCount > 0 ? `確定すると、未確定のサブタスク${unfinalizedDescendantCount}件も同時に確定します。` : "確定するまで日程を自由に調整できます。"}</span></div>{!task.finalized && task.scheduleAssigned !== false && <button type="button" className="quiet-button" disabled={saving} onClick={() => void finalize()}>{unfinalizedDescendantCount > 0 ? "親子の状態を確定" : "タスクの状態を確定"}</button>}</div>
     <FormFields form={form} setForm={setForm} projects={projects} users={users} tasks={tasks} currentTaskId={task.id} includeActual scheduleLocked={task.finalized} />
     <button type="button" className="child-task-button" onClick={onCreateChild}>＋ ロードマップ上でサブタスクを追加</button>
     <div className="editor-actions"><button className="primary-button" disabled={saving}>{saving ? "保存中…" : task.scheduleAssigned === false ? "日程を入力して配置" : "変更を保存"}</button></div>
@@ -464,6 +489,7 @@ function ProgressModal({ task, pastOnly, reportDate, onClose, onSaved, onError }
   const [progressError, setProgressError] = useState<string | null>(null);
   const [note, setNote] = useState(pastOnly ? "" : task.todayProgressNote ?? "");
   const [delayReason, setDelayReason] = useState("");
+  const [delayReasonCategory, setDelayReasonCategory] = useState<ReasonCategory | "">("");
   const [earlyStartReason, setEarlyStartReason] = useState(pastOnly ? "" : task.todayEarlyStartReason ?? "");
   const [saving, setSaving] = useState(false);
   const [pastDates, setPastDates] = useState<string[] | null>(pastOnly ? null : []);
@@ -508,7 +534,7 @@ function ProgressModal({ task, pastOnly, reportDate, onClose, onSaved, onError }
       return;
     }
     setSaving(true);
-    try { await saveDailyProgress(task.id, selectedDate, dailyProgress, note, delayReason, earlyStartReason); await onSaved(); }
+    try { await saveDailyProgress(task.id, selectedDate, dailyProgress, note, delayReason, earlyStartReason, delayReasonCategory); await onSaved(); }
     catch (cause) { onError(toMessage(cause)); setSaving(false); }
   }
   const editing = !pastOnly && task.todayDailyProgress != null;
@@ -520,26 +546,27 @@ function ProgressModal({ task, pastOnly, reportDate, onClose, onSaved, onError }
       <label>{pastOnly ? "その日に進んだ進捗" : "今日進んだ進捗"}（%）<input aria-label={pastOnly ? "その日に進んだ進捗" : "今日進んだ進捗"} aria-describedby={progressError ? "daily-progress-error" : undefined} aria-invalid={progressError ? "true" : undefined} type="number" min="0" max={maxProgress} placeholder="0" value={progress} onChange={(e) => { setProgressError(null); setProgress(e.currentTarget.value === "" ? "" : Math.max(0, Math.min(maxProgress, Number(e.currentTarget.value)))); }} /></label>
       {progressError && <div id="daily-progress-error" className="error" role="alert"><span>{progressError}</span></div>}
       <label>{pastOnly ? "その日のメモ" : "今日のメモ"}<textarea rows={4} maxLength={500} value={note} onChange={(e) => setNote(e.currentTarget.value)} placeholder="進んだこと、困っていること" /></label>
-      {delayed && <label className="delay-reason">計画を下回る理由<span>必須</span><textarea required rows={3} maxLength={1000} value={delayReason} onChange={(e) => setDelayReason(e.currentTarget.value)} placeholder="遅延の要因と対応方針を記載してください" /></label>}
+      {delayed && <ReasonFields category={delayReasonCategory} reason={delayReason} onCategoryChange={setDelayReasonCategory} onReasonChange={setDelayReason} reasonLabel="計画を下回る理由" placeholder="遅延の要因と対応方針を記載してください" className="delay-reason" />}
       {earlyStart && <label className="early-start-reason">前提タスクの完了前に開始した理由<span>必須</span><small>未完了：{incompletePrerequisites.map((item) => item.title).join("、")}</small><textarea required rows={3} maxLength={1000} value={earlyStartReason} onChange={(e) => setEarlyStartReason(e.currentTarget.value)} placeholder="待たずに開始した判断、影響、対応を記載してください" /></label>}
-      <div className="modal-actions"><button type="button" className="quiet-button" onClick={onClose}>キャンセル</button><button className="primary-button" disabled={saving || !selectedDate || (delayed && !delayReason.trim()) || (earlyStart && !earlyStartReason.trim())}>{saving ? "保存中…" : editing ? "更新する" : "記録する"}</button></div>
+      <div className="modal-actions"><button type="button" className="quiet-button" onClick={onClose}>キャンセル</button><button className="primary-button" disabled={saving || !selectedDate || (delayed && (!delayReasonCategory || !delayReason.trim())) || (earlyStart && !earlyStartReason.trim())}>{saving ? "保存中…" : editing ? "更新する" : "記録する"}</button></div>
     </form>
   </Modal>;
 }
 
 function RescheduleModal({ task, changes, tasks, onClose, onSaved, onError }: { task: WbsTask; changes: ScheduleChange[]; tasks: WbsTask[]; onClose: () => void; onSaved: () => Promise<void>; onError: (value: string | null) => void }) {
   const [reason, setReason] = useState("");
+  const [reasonCategory, setReasonCategory] = useState<ReasonCategory | "">("");
   const [saving, setSaving] = useState(false);
   async function submit(event: FormEvent) {
     event.preventDefault(); setSaving(true);
-    try { await saveScheduleChanges(changes.map((change) => ({ taskId: change.taskId, ...change.after, historyContext: change.historyContext })), reason); await onSaved(); }
+    try { await saveScheduleChanges(changes.map((change) => ({ taskId: change.taskId, ...change.after, historyContext: change.historyContext })), reason, reasonCategory); await onSaved(); }
     catch (cause) { onError(toMessage(cause)); setSaving(false); }
   }
   return <Modal title="リスケ理由を記録" onClose={onClose}><form className="modal-form" onSubmit={submit}>
     <p className="modal-lead">{task.title} の日程を変更します。影響する親タスクも同時に更新されます。</p>
     <div className="schedule-change-list">{changes.map((change) => <div key={change.taskId}><strong>{tasks.find((item) => item.id === change.taskId)?.title ?? `タスク #${change.taskId}`}</strong><span>{change.before.plannedStart}〜{change.before.plannedEnd}</span><b>→</b><span>{change.after.plannedStart}〜{change.after.plannedEnd}</span></div>)}</div>
-    <label>変更理由<span className="required-label">必須</span><textarea autoFocus required rows={4} maxLength={1000} value={reason} onChange={(event) => setReason(event.currentTarget.value)} placeholder="変更が必要になった背景と影響を記載してください" /></label>
-    <div className="modal-actions"><button type="button" className="quiet-button" onClick={onClose}>キャンセル</button><button className="primary-button" disabled={saving || !reason.trim()}>{saving ? "変更中…" : "理由を記録して変更"}</button></div>
+    <ReasonFields category={reasonCategory} reason={reason} onCategoryChange={setReasonCategory} onReasonChange={setReason} reasonLabel="変更理由" placeholder="変更が必要になった背景と影響を記載してください" autoFocus />
+    <div className="modal-actions"><button type="button" className="quiet-button" onClick={onClose}>キャンセル</button><button className="primary-button" disabled={saving || !reasonCategory || !reason.trim()}>{saving ? "変更中…" : "理由を記録して変更"}</button></div>
   </form></Modal>;
 }
 
@@ -556,9 +583,19 @@ function HistoryModal({ task, onClose, onError }: { task: WbsTask; onClose: () =
   return <Modal title="作業経緯" onClose={onClose}><div className="history-modal">
     <div className="history-overview"><div><p className="modal-lead">{task.title}</p><small>{childCount > 0 ? "親自身と配下の履歴を新しい順に確認できます。" : "このタスクの履歴を新しい順に表示します。"}</small></div>{entries && <strong>{entries.length}<span>件</span></strong>}</div>
     {entries && childCount > 0 && <div className="history-scope" role="group" aria-label="作業経緯の表示範囲"><button className={scope === "all" ? "active" : ""} aria-pressed={scope === "all"} onClick={() => { setScope("all"); setExpanded(false); }}>配下を含む <span>{entries.length}</span></button><button className={scope === "self" ? "active" : ""} aria-pressed={scope === "self"} onClick={() => { setScope("self"); setExpanded(false); }}>親自身のみ <span>{ownCount}</span></button></div>}
-    {entries === null ? <div className="history-empty">読み込んでいます…</div> : filtered.length === 0 ? <div className="history-empty">この範囲に記録された経緯はありません。</div> : <><ol className="history-timeline">{visible.map((entry) => <li key={entry.id} className={entry.type}><time>{formatHistoryTime(entry.occurredAt)}</time><div><div className="history-entry-meta"><span>{labels[entry.type]}</span>{entry.depth > 0 && <small title={`親から${entry.depth}階層下`}>{entry.taskTitle}</small>}</div><p>{entry.details}</p>{entry.reason && <blockquote><strong>理由</strong>{entry.reason}</blockquote>}</div></li>)}</ol>{filtered.length > 8 && <button type="button" className="history-more" onClick={() => setExpanded((current) => !current)}>{expanded ? "最新8件に戻す" : `さらに${filtered.length - 8}件を表示`}</button>}</>}
+    {entries === null ? <div className="history-empty">読み込んでいます…</div> : filtered.length === 0 ? <div className="history-empty">この範囲に記録された経緯はありません。</div> : <><ol className="history-timeline">{visible.map((entry) => <li key={entry.id} className={entry.type}><time>{formatHistoryTime(entry.occurredAt)}</time><div><div className="history-entry-meta"><span>{labels[entry.type]}</span>{entry.depth > 0 && <small title={`親から${entry.depth}階層下`}>{entry.taskTitle}</small>}</div><p>{entry.details}</p>{entry.reason && <blockquote><strong>理由{entry.reasonCategory && <em>{reasonCategoryLabel(entry.reasonCategory)}</em>}</strong>{entry.reason}</blockquote>}</div></li>)}</ol>{filtered.length > 8 && <button type="button" className="history-more" onClick={() => setExpanded((current) => !current)}>{expanded ? "最新8件に戻す" : `さらに${filtered.length - 8}件を表示`}</button>}</>}
     <div className="modal-actions"><button className="quiet-button" onClick={onClose}>閉じる</button></div>
   </div></Modal>;
+}
+
+function ReasonFields({ category, reason, onCategoryChange, onReasonChange, reasonLabel, placeholder, className, autoFocus = false }: {
+  category: ReasonCategory | ""; reason: string; onCategoryChange: (value: ReasonCategory | "") => void; onReasonChange: (value: string) => void;
+  reasonLabel: string; placeholder: string; className?: string; autoFocus?: boolean;
+}) {
+  return <div className={`reason-fields ${className ?? ""}`}>
+    <label>理由の区分<span className="required-label">必須</span><select required value={category} onChange={(event) => onCategoryChange(event.currentTarget.value as ReasonCategory | "")}><option value="">選択してください</option>{REASON_CATEGORY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+    <label>{reasonLabel}<span className="required-label">必須</span><textarea autoFocus={autoFocus} required rows={4} maxLength={1000} value={reason} onChange={(event) => onReasonChange(event.currentTarget.value)} placeholder={placeholder} /></label>
+  </div>;
 }
 
 function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {

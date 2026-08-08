@@ -16,6 +16,10 @@ function query(sql: string): string {
   return execFileSync("sqlite3", ["-readonly", database, sql], { encoding: "utf8" }).trim();
 }
 
+function execute(sql: string): void {
+  execFileSync("sqlite3", [database, sql], { stdio: ["pipe", "pipe", "pipe"] });
+}
+
 beforeAll(() => {
   execFileSync("sqlite3", [database], { input: migrations });
 });
@@ -37,5 +41,15 @@ describe("v2 SQLite baseline", () => {
     expect(query("SELECT COUNT(*) FROM pragma_table_info('wbs_tasks') WHERE name='owner_user_id';")).toBe("1");
     expect(query("SELECT COUNT(*) FROM pragma_table_info('task_progress_entries') WHERE name='early_start_reason';")).toBe("1");
     expect(query("SELECT COUNT(*) FROM pragma_table_info('wbs_tasks') WHERE name='schedule_assigned';")).toBe("1");
+    expect(query("SELECT COUNT(*) FROM pragma_table_info('task_activity_events') WHERE name='reason_category';")).toBe("1");
+    expect(query("SELECT COUNT(*) FROM pragma_table_info('task_activity_events') WHERE name='owner_user_id';")).toBe("1");
+    expect(query("SELECT COUNT(*) FROM sqlite_schema WHERE type='trigger' AND name='record_wbs_task_finalization';")).toBe("1");
+  });
+
+  it("records every newly finalized descendant through the schema trigger", () => {
+    execute("INSERT INTO users (id,name,email) VALUES (201,'山田','owner@example.com'); INSERT INTO wbs_tasks (id,title,owner_user_id,planned_start,planned_end,business_days) VALUES (101,'親',201,'2026-08-03','2026-08-07',5),(102,'子',201,'2026-08-03','2026-08-05',3); UPDATE wbs_tasks SET parent_task_id=101 WHERE id=102; UPDATE wbs_tasks SET finalized=1 WHERE id IN (101,102);");
+    expect(query("SELECT group_concat(task_id, ',') FROM task_activity_events WHERE event_kind='finalized' ORDER BY task_id;")).toBe("101,102");
+    expect(query("SELECT group_concat(owner_user_id, ',') FROM task_activity_events WHERE event_kind='finalized' ORDER BY task_id;")).toBe("201,201");
+    expect(() => execute("INSERT INTO task_activity_events (task_id,event_kind,reason_category) VALUES (101,'delay','invalid');")).toThrow();
   });
 });
