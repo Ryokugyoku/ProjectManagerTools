@@ -29,8 +29,12 @@ export type UserLeave = {
   type: UserLeaveType;
   unit: UserLeaveUnit;
   reason: string;
+  customerApproved: boolean;
+  managerApproved: boolean;
+  workflowApproved: boolean;
+  createdAt: string;
 };
-export type UserLeaveInput = Omit<UserLeave, "id" | "userName">;
+export type UserLeaveInput = Omit<UserLeave, "id" | "userName" | "createdAt">;
 export type WbsTask = {
   id: number;
   title: string;
@@ -113,6 +117,7 @@ type SettingsRow = {
 type UserLeaveRow = {
   id: number; user_id: number; user_name: string; leave_date: string;
   leave_type: UserLeaveType; leave_unit: UserLeaveUnit; reason: string;
+  customer_approved: number; manager_approved: number; workflow_approved: number; created_at: string;
 };
 
 let databasePromise: Promise<Database> | undefined;
@@ -151,7 +156,8 @@ export async function listWbsTasks(date = localISODate()): Promise<WbsTask[]> {
     ORDER BY dependency.task_id, prerequisite.planned_start, prerequisite.id
   `);
   const leaveRows = await db.select<UserLeaveRow[]>(`SELECT leave.id, leave.user_id,
-    assignee.name AS user_name, leave.leave_date, leave.leave_type, leave.leave_unit, leave.reason
+    assignee.name AS user_name, leave.leave_date, leave.leave_type, leave.leave_unit, leave.reason,
+    leave.customer_approved, leave.manager_approved, leave.workflow_approved, leave.created_at
     FROM user_leaves leave JOIN assignees assignee ON assignee.id=leave.user_id
     ORDER BY leave.leave_date, leave.id`) ?? [];
   const leavesByUser = new Map<number, UserLeave[]>();
@@ -319,7 +325,8 @@ export async function saveDailyProgress(taskId: number, date: string, dailyProgr
     [taskId],
   );
   const leaveRows = task.assignee_id == null ? [] : await db.select<UserLeaveRow[]>(`SELECT leave.id, leave.user_id,
-    assignee.name AS user_name, leave.leave_date, leave.leave_type, leave.leave_unit, leave.reason
+    assignee.name AS user_name, leave.leave_date, leave.leave_type, leave.leave_unit, leave.reason,
+    leave.customer_approved, leave.manager_approved, leave.workflow_approved, leave.created_at
     FROM user_leaves leave JOIN assignees assignee ON assignee.id=leave.user_id WHERE leave.user_id=$1`, [task.assignee_id]);
   const baselineProgress = logs.length > 0 ? Math.max(0, logs[0].progress - logs[0].daily_progress) : task.progress;
   const dailyByDate = new Map(logs.map((log) => [log.log_date, log.daily_progress]));
@@ -418,7 +425,8 @@ export async function deleteAssignee(id: number): Promise<void> {
 export async function listUserLeaves(): Promise<UserLeave[]> {
   const db = await database();
   const rows = await db.select<UserLeaveRow[]>(`SELECT leave.id, leave.user_id,
-    assignee.name AS user_name, leave.leave_date, leave.leave_type, leave.leave_unit, leave.reason
+    assignee.name AS user_name, leave.leave_date, leave.leave_type, leave.leave_unit, leave.reason,
+    leave.customer_approved, leave.manager_approved, leave.workflow_approved, leave.created_at
     FROM user_leaves leave JOIN assignees assignee ON assignee.id=leave.user_id
     ORDER BY leave.leave_date DESC, leave.id DESC`);
   return rows.map(mapUserLeave);
@@ -427,16 +435,20 @@ export async function listUserLeaves(): Promise<UserLeave[]> {
 export async function createUserLeave(input: UserLeaveInput): Promise<void> {
   validateUserLeave(input);
   const db = await database();
-  await db.execute(`INSERT INTO user_leaves (user_id, leave_date, leave_type, leave_unit, reason)
-    VALUES ($1, $2, $3, $4, $5)`, [input.userId, input.date, input.type, input.unit, input.reason.trim()]);
+  await db.execute(`INSERT INTO user_leaves (user_id, leave_date, leave_type, leave_unit, reason,
+    customer_approved, manager_approved, workflow_approved)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, [input.userId, input.date, input.type, input.unit, input.reason.trim(),
+    input.customerApproved ? 1 : 0, input.managerApproved ? 1 : 0, input.workflowApproved ? 1 : 0]);
 }
 
 export async function updateUserLeave(id: number, input: UserLeaveInput): Promise<void> {
   validateUserLeave(input);
   const db = await database();
   await db.execute(`UPDATE user_leaves SET user_id=$1, leave_date=$2, leave_type=$3,
-    leave_unit=$4, reason=$5, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id=$6`,
-  [input.userId, input.date, input.type, input.unit, input.reason.trim(), id]);
+    leave_unit=$4, reason=$5, customer_approved=$6, manager_approved=$7, workflow_approved=$8,
+    updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id=$9`,
+  [input.userId, input.date, input.type, input.unit, input.reason.trim(), input.customerApproved ? 1 : 0,
+    input.managerApproved ? 1 : 0, input.workflowApproved ? 1 : 0, id]);
 }
 
 export async function deleteUserLeave(id: number): Promise<void> {
@@ -528,7 +540,12 @@ function validateUserLeave(input: UserLeaveInput) {
 }
 
 function mapUserLeave(row: UserLeaveRow): UserLeave {
-  return { id: row.id, userId: row.user_id, userName: row.user_name, date: row.leave_date, type: row.leave_type, unit: row.leave_unit, reason: row.reason };
+  return {
+    id: row.id, userId: row.user_id, userName: row.user_name, date: row.leave_date,
+    type: row.leave_type, unit: row.leave_unit, reason: row.reason,
+    customerApproved: row.customer_approved === 1, managerApproved: row.manager_approved === 1,
+    workflowApproved: row.workflow_approved === 1, createdAt: row.created_at,
+  };
 }
 
 async function validateProjectAssignment(db: Database, projectId: number | null, assigneeId: number | null) {

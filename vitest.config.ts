@@ -3,11 +3,11 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     environment: "node",
-    include: ["tests/**/*.test.ts"],
+    include: ["tests/**/*.test.{ts,tsx}"],
     clearMocks: true,
     coverage: {
       provider: "v8",
-      include: ["src/lib/calendar.ts", "src/lib/wbs.ts", "src/lib/projects.ts"],
+      include: ["src/lib/calendar.ts", "src/lib/leaveApprovals.ts", "src/lib/wbs.ts", "src/lib/projects.ts"],
       reporter: ["text", "json-summary", "html"],
       reportsDirectory: "coverage",
       thresholds: {

@@ -21,6 +21,7 @@ import { listProjects, type Project } from "./lib/projects";
 import { createMilestone, deleteMilestone, listMilestones, MILESTONE_COLOR_OPTIONS, updateMilestone, type Milestone, type MilestoneInput } from "./lib/milestones";
 import { MilestonePanel } from "./features/wbs/MilestonePanel";
 import { dailyProgressActionLabel, filterWbsTasks, parentTaskCandidates, prerequisiteTaskCandidates, summarizeWbsTasks, type WbsFilters, type WbsFilterValue, type WbsGroupBy } from "./lib/wbsView";
+import { pendingApprovalLabel, summarizeLeaveApprovals } from "./lib/leaveApprovals";
 import "./App.css";
 
 type View = "home" | "wbs" | "analysis" | "reports" | "projects" | "users" | "settings";
@@ -133,6 +134,11 @@ function App() {
   const openTasks = useMemo(() => roadmapTasks.filter((task) => task.status !== "completed").length, [roadmapTasks]);
   const visibleTasks = useMemo(() => filterWbsTasks(tasks, filters), [filters, tasks]);
   const visibleSummary = useMemo(() => summarizeWbsTasks(visibleTasks, formatISODate(new Date())), [visibleTasks]);
+  const roadmapLeaveAttention = useMemo(() => {
+    const assigneeIds = new Set(roadmapTasks.flatMap((task) => task.assigneeId === null ? [] : [task.assigneeId]));
+    return userLeaves.map((leave) => ({ leave, approval: summarizeLeaveApprovals(leave, currentDate, settings.countryCode) }))
+      .filter(({ leave, approval }) => assigneeIds.has(leave.userId) && approval.state !== "complete");
+  }, [currentDate, roadmapTasks, settings.countryCode, userLeaves]);
   const filterAssignees = useMemo(() => {
     if (typeof filters.projectId !== "number") return assignees;
     const project = projects.find((item) => item.id === filters.projectId);
@@ -232,13 +238,13 @@ function App() {
       {error && <div className="global-error error" role="alert"><span>{error}</span><button onClick={() => setError(null)}>閉じる</button></div>}
 
       {view === "home" ? (
-        <HomeScreen tasks={tasks} projects={projects} users={assignees} loading={loading} onNavigate={(nextView) => nextView === "wbs" ? openWbsProjectSelection() : setView(nextView)} onOpenTask={(task) => { setRoadmapMode(task.projectId === null ? "all" : "project"); setSelectedRoadmapProjectId(task.projectId); setFilters({ query: "", projectId: task.projectId ?? "all", assigneeId: "all", status: "all" }); setSelectedId(task.id); setView("wbs"); }} />
+        <HomeScreen tasks={tasks} projects={projects} users={assignees} leaves={userLeaves} countryCode={settings.countryCode} today={currentDate} loading={loading} onNavigate={(nextView) => nextView === "wbs" ? openWbsProjectSelection() : setView(nextView)} onOpenTask={(task) => { setRoadmapMode(task.projectId === null ? "all" : "project"); setSelectedRoadmapProjectId(task.projectId); setFilters({ query: "", projectId: task.projectId ?? "all", assigneeId: "all", status: "all" }); setSelectedId(task.id); setView("wbs"); }} />
       ) : view === "analysis" ? (
         <AnalysisScreen projects={projects} tasks={tasks} today={currentDate} loading={loading} />
       ) : view === "reports" ? (
         <DailyReportScreen projects={projects} tasks={tasks} snapshots={reportSnapshots} reportDate={reportDate} loading={loading || reportLoading} ancestorDepth={settings.dailyReportAncestorDepth} onOpenWbs={(projectId) => { const project = projects.find((item) => item.id === projectId); if (project) { openProjectRoadmap(project); setView("wbs"); } else openWbsProjectSelection(); }} />
       ) : view === "users" ? (
-        <UsersScreen users={assignees} leaves={userLeaves} onChanged={refresh} onError={setError} />
+        <UsersScreen users={assignees} leaves={userLeaves} countryCode={settings.countryCode} today={currentDate} onChanged={refresh} onError={setError} />
       ) : view === "projects" ? (
         <ProjectsScreen projects={projects} users={assignees} onChanged={refresh} onError={setError} />
       ) : view === "settings" ? (
@@ -262,6 +268,7 @@ function App() {
           </header>
 
           {!loading && assignees.length === 0 && <section className="setup-banner" aria-label="WBSの準備状況"><div><span className="setup-icon">↗</span><div><strong>WBSをチームの計画として活用しましょう</strong><p>ユーザーを登録して案件メンバーに追加すると、WBSへ責任者を割り当てられます。</p></div></div><div><button className="quiet-button" onClick={() => setView("users")}>ユーザーを登録</button></div></section>}
+          {!loading && roadmapLeaveAttention.length > 0 && <section className={`leave-warning-banner ${roadmapLeaveAttention.some(({ approval }) => approval.state === "urgent") ? "urgent" : "pending"}`} aria-label="休暇の未承認状況"><div><strong>{roadmapLeaveAttention.some(({ approval }) => approval.state === "urgent") ? "本日中に休暇承認の対応が必要です" : "休暇の承認待ちがあります"}</strong><p>{roadmapLeaveAttention.slice(0, 3).map(({ leave, approval }) => `${leave.userName} ${leave.date}：${pendingApprovalLabel(approval.state === "urgent" ? approval.urgent : approval.pending)}`).join(" ／ ")}{roadmapLeaveAttention.length > 3 ? ` ほか${roadmapLeaveAttention.length - 3}件` : ""}</p></div><button className="quiet-button" onClick={() => setView("users")}>承認状況を確認</button></section>}
 
           {!loading && selectedRoadmapProject && <MilestonePanel milestones={roadmapMilestones} project={selectedRoadmapProject} today={formatISODate(new Date())} onCreate={() => setMilestoneEditor("new")} onEdit={setMilestoneEditor} />}
 

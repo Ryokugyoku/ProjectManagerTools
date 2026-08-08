@@ -83,6 +83,12 @@ pub fn run() {
             sql: include_str!("../migrations/0013_create_user_leaves.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 14,
+            description: "add_user_leave_approvals",
+            sql: include_str!("../migrations/0014_add_user_leave_approvals.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()

@@ -220,18 +220,18 @@ describe("user and settings data methods", () => {
   });
 
   it("lists, creates, updates, and deletes user leave", async () => {
-    db.select.mockResolvedValueOnce([{ id: 4, user_id: 3, user_name: "山田", leave_date: "2026-08-12", leave_type: "planned", leave_unit: "morning", reason: "通院" }]);
-    expect(await listUserLeaves()).toEqual([{ id: 4, userId: 3, userName: "山田", date: "2026-08-12", type: "planned", unit: "morning", reason: "通院" }]);
-    await createUserLeave({ userId: 3, date: "2026-08-13", type: "planned", unit: "afternoon", reason: " 私用 " });
-    await updateUserLeave(4, { userId: 3, date: "2026-08-12", type: "unplanned", unit: "full_day", reason: " 体調不良 " });
+    db.select.mockResolvedValueOnce([{ id: 4, user_id: 3, user_name: "山田", leave_date: "2026-08-12", leave_type: "planned", leave_unit: "morning", reason: "通院", customer_approved: 1, manager_approved: 0, workflow_approved: 1, created_at: "2026-08-01T01:00:00Z" }]);
+    expect(await listUserLeaves()).toEqual([{ id: 4, userId: 3, userName: "山田", date: "2026-08-12", type: "planned", unit: "morning", reason: "通院", customerApproved: true, managerApproved: false, workflowApproved: true, createdAt: "2026-08-01T01:00:00Z" }]);
+    await createUserLeave({ userId: 3, date: "2026-08-13", type: "planned", unit: "afternoon", reason: " 私用 ", customerApproved: true, managerApproved: false, workflowApproved: false });
+    await updateUserLeave(4, { userId: 3, date: "2026-08-12", type: "unplanned", unit: "full_day", reason: " 体調不良 ", customerApproved: true, managerApproved: true, workflowApproved: true });
     await deleteUserLeave(4);
-    expect(db.execute).toHaveBeenCalledWith(expect.stringContaining("INSERT INTO user_leaves"), [3, "2026-08-13", "planned", "afternoon", "私用"]);
-    expect(db.execute).toHaveBeenCalledWith(expect.stringContaining("UPDATE user_leaves"), [3, "2026-08-12", "unplanned", "full_day", "体調不良", 4]);
+    expect(db.execute).toHaveBeenCalledWith(expect.stringContaining("INSERT INTO user_leaves"), [3, "2026-08-13", "planned", "afternoon", "私用", 1, 0, 0]);
+    expect(db.execute).toHaveBeenCalledWith(expect.stringContaining("UPDATE user_leaves"), [3, "2026-08-12", "unplanned", "full_day", "体調不良", 1, 1, 1, 4]);
     expect(db.execute).toHaveBeenLastCalledWith("DELETE FROM user_leaves WHERE id=$1", [4]);
   });
 
   it("requires a reason for unplanned leave", async () => {
-    await expect(createUserLeave({ userId: 3, date: "2026-08-13", type: "unplanned", unit: "full_day", reason: " " })).rejects.toThrow("理由");
+    await expect(createUserLeave({ userId: 3, date: "2026-08-13", type: "unplanned", unit: "full_day", reason: " ", customerApproved: false, managerApproved: false, workflowApproved: false })).rejects.toThrow("理由");
     expect(db.execute).not.toHaveBeenCalled();
   });
 

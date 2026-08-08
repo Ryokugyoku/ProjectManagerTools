@@ -8,6 +8,7 @@ import { milestoneColorTokens, type Milestone } from "../../lib/milestones";
 import type { Assignee, WbsTask } from "../../lib/wbs";
 import { currentDayCheckpoint, expectedProgress, progressHealth } from "../../lib/wbsPlanning";
 import { buildTimelineDateRange, buildTimelineMonths, buildWbsGroups, dailyProgressActionLabel, flattenWbsTaskTree, type WbsGroupBy } from "../../lib/wbsView";
+import { summarizeLeaveApprovals } from "../../lib/leaveApprovals";
 
 const DAY_WIDTH = 42;
 
@@ -267,7 +268,11 @@ export function TimelineBoard({ tasks, allTasks = tasks, milestones, assignees, 
               <span className={`status-cell ${task.status}`}>{statusLabel(task.status)}</span>
               <span className={`progress-cell ${health}`} title={`${hasChildren ? "子タスクから自動集計" : "実績"} ${task.progress}% / 今日の予定 ${plannedProgress}%`}><strong>{task.progress}%</strong><small>{hasChildren ? "子から集計" : `予定 ${plannedProgress}%`}</small></span>
               <div className="timeline-cells" style={{ backgroundImage: timelineBackground }}>
-                {(task.assigneeLeaves ?? []).filter((leave) => leave.date >= range.start && leave.date <= range.end).map((leave) => <span key={leave.id} className={`task-leave-marker ${leave.unit}`} style={{ left: dayDifference(range.start, leave.date) * DAY_WIDTH }} title={`${task.assigneeName ?? "担当者"}：${leave.date} ${leaveUnitLabel(leave.unit)}（${leave.type === "planned" ? "計画休" : "計画外"}）${leave.reason ? ` ${leave.reason}` : ""}`} aria-label={`${task.assigneeName ?? "担当者"}は${leave.date}に${leaveUnitLabel(leave.unit)}`}><i aria-hidden="true">{leave.unit === "full_day" ? "休" : leave.unit === "morning" ? "午" : "後"}</i></span>)}
+                {(task.assigneeLeaves ?? []).filter((leave) => leave.date >= range.start && leave.date <= range.end).map((leave) => {
+                  const approval = summarizeLeaveApprovals(leave, today, countryCode);
+                  const approvalText = approval.state === "complete" ? "承認済み" : approval.state === "urgent" ? "本日中に承認対応" : "承認待ち";
+                  return <span key={leave.id} className={`task-leave-marker ${leave.unit} ${approval.state}`} style={{ left: dayDifference(range.start, leave.date) * DAY_WIDTH }} title={`${task.assigneeName ?? "担当者"}：${leave.date} ${leaveUnitLabel(leave.unit)}（${leave.type === "planned" ? "計画休" : "計画外"}・${approvalText}）${leave.reason ? ` ${leave.reason}` : ""}`} aria-label={`${task.assigneeName ?? "担当者"}は${leave.date}に${leaveUnitLabel(leave.unit)}、${approvalText}`}><i aria-hidden="true">{approval.state === "urgent" ? "!" : leave.unit === "full_day" ? "休" : leave.unit === "morning" ? "午" : "後"}</i></span>;
+                })}
                 <div className={`timeline-bar ${task.status} ${health} ${hasChildren ? "has-children" : ""}`} style={{ left, width }}>
                   <button className="resize-handle left" aria-label={`${task.title}の営業日数を1日減らす。ドラッグで開始側を調整`} onPointerDown={(event) => begin(event, task, "left")} onClick={() => void clickDuration(task, -1)} onKeyDown={(event) => void keyboardAdjust(event, task, "left")}>−</button>
                   <button className="bar-body" title={`実績 ${task.progress}% / 今日の予定 ${plannedProgress}%（点線）`} onPointerDown={(event) => begin(event, task, "move")} onKeyDown={(event) => void keyboardAdjust(event, task, "move")}><i className="actual-progress" style={{ width: `${task.progress}%` }} /><i className="planned-progress" style={{ left: `${plannedProgress}%` }} /><span>{task.title} · {task.progress}%</span></button>
