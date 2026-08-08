@@ -8,7 +8,7 @@ import {
 } from "./lib/wbs";
 import { buildAncestorEndExtensions, buildScheduleCascade, expectedProgress, scheduleChangesRequireReason, type ScheduleChange, type TaskSchedule } from "./lib/wbsPlanning";
 import { TimelineBoard } from "./features/wbs/TimelineBoard";
-import { businessDaysOrDefault, earliestPrerequisiteStart, missingProgressDates, parseBusinessDaysInput, requireDailyProgress, requiresEarlyStartReason, type WbsTaskForm } from "./features/wbs/taskForm";
+import { businessDaysOrDefault, earliestPrerequisiteStart, missingProgressDates, parseBusinessDaysInput, requireDailyProgress, requiresEarlyStartReason, taskCreateActionLabel, type WbsTaskForm } from "./features/wbs/taskForm";
 import { WbsProjectSelector } from "./features/wbs/WbsProjectSelector";
 import { UsersScreen } from "./features/users/UsersScreen";
 import { AttendanceScreen } from "./features/attendance/AttendanceScreen";
@@ -188,9 +188,6 @@ function App() {
   }, [editingTaskId, visibleTasks]);
 
   async function removeTask(task: WbsTask) {
-    const hasChildren = tasks.some((candidate) => candidate.parentTaskId === task.id);
-    const note = hasChildren ? "\n子タスクは削除せず、親なしのタスクとして残します。" : "";
-    if (!window.confirm(`「${task.title}」を削除しますか？${note}`)) return;
     try { await deleteWbsTask(task.id); await refresh(); } catch (cause) { setError(toMessage(cause)); }
   }
 
@@ -312,13 +309,14 @@ function App() {
 function MilestoneModal({ milestone, project, onClose, onSaved, onError }: { milestone: Milestone | null; project: Project; onClose: () => void; onSaved: () => Promise<void>; onError: (value: string | null) => void }) {
   const [form, setForm] = useState<MilestoneInput>({ projectId: project.id, name: milestone?.name ?? "", description: milestone?.description ?? "", dueDate: milestone?.dueDate ?? formatISODate(new Date()), completed: milestone?.completed ?? false, color: milestone?.color ?? "forest" });
   const [saving, setSaving] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   async function submit(event: FormEvent) {
     event.preventDefault(); setSaving(true);
     try { if (milestone) await updateMilestone(milestone.id, form); else await createMilestone(form); await onSaved(); }
     catch (cause) { onError(toMessage(cause)); setSaving(false); }
   }
   async function remove() {
-    if (!milestone || !window.confirm(`マイルストーン「${milestone.name}」を削除しますか？`)) return;
+    if (!milestone) return;
     setSaving(true);
     try { await deleteMilestone(milestone.id); await onSaved(); } catch (cause) { onError(toMessage(cause)); setSaving(false); }
   }
@@ -332,7 +330,8 @@ function MilestoneModal({ milestone, project, onClose, onSaved, onError }: { mil
         <label>達成予定日<input required type="date" value={form.dueDate} onChange={(event) => setForm({ ...form, dueDate: event.currentTarget.value })} /></label>
         <label className="milestone-completed"><span>達成状態</span><span><input type="checkbox" checked={form.completed} onChange={(event) => setForm({ ...form, completed: event.currentTarget.checked })} /> 達成済みにする</span></label>
       </div>
-      <div className="modal-actions milestone-actions">{milestone && <button type="button" className="danger-text" disabled={saving} onClick={() => void remove()}>削除</button>}<span className="action-spacer" /><button type="button" className="quiet-button" onClick={onClose}>キャンセル</button><button className="primary-button" disabled={saving || !form.name.trim()}>{saving ? "保存中…" : milestone ? "変更を保存" : "追加する"}</button></div>
+      {confirmingDelete && milestone && <div className="warning wide" role="alert"><strong>マイルストーンを削除しますか？</strong><span>「{milestone.name}」は削除後に元へ戻せません。</span><div className="inline-confirm-actions"><button type="button" className="quiet-button" onClick={() => setConfirmingDelete(false)}>削除しない</button><button type="button" className="danger-button" disabled={saving} onClick={() => void remove()}>{saving ? "削除中…" : "削除する"}</button></div></div>}
+      <div className="modal-actions milestone-actions">{milestone && <button type="button" className="danger-text" disabled={saving || confirmingDelete} onClick={() => setConfirmingDelete(true)}>削除</button>}<span className="action-spacer" /><button type="button" className="quiet-button" onClick={onClose}>キャンセル</button><button className="primary-button" disabled={saving || !form.name.trim()}>{saving ? "保存中…" : milestone ? "変更を保存" : "追加する"}</button></div>
     </form>
   </Modal>;
 }
@@ -360,7 +359,6 @@ function TaskModal({ settings, projects, users, tasks, initialProjectId, initial
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (ancestorExtensions.length > 0 && !window.confirm(`サブタスクの終了予定日が親の日程を超えます。${ancestorExtensions.map((change) => tasks.find((task) => task.id === change.taskId)?.title).filter(Boolean).join("、")}の終了予定日を延長して追加しますか？`)) return;
     setSaving(true);
     try {
       await createWbsTask({ ...form, businessDays, plannedEnd: end, scheduleAssigned: true });
@@ -382,8 +380,8 @@ function TaskModal({ settings, projects, users, tasks, initialProjectId, initial
         <div><small>1日の平均進捗</small><strong>{average.toFixed(1)}%</strong></div>
       </div>
       {businessDays >= 5 && <div className="warning" role="status"><strong>サブタスクへの分割をおすすめします</strong><span>5営業日以上のタスクです。完了条件が明確な小さなサブタスクとして分割すると、遅れを早く発見できます。</span></div>}
-      {ancestorExtensions.length > 0 && <div className="warning wide" role="alert"><strong>親タスクの日程を超えます</strong><span>追加すると、{ancestorExtensions.map((change) => { const task = tasks.find((item) => item.id === change.taskId); return `${task?.title ?? "親タスク"}（${change.before.plannedEnd} → ${change.after.plannedEnd}）`; }).join("、")} の終了予定日を延長します。登録時にもう一度確認します。</span></div>}
-      <div className="modal-actions"><button type="button" className="quiet-button" onClick={onClose}>キャンセル</button><button className="primary-button" disabled={saving || !form.title.trim()}>{saving ? "保存中…" : "登録する"}</button></div>
+      {ancestorExtensions.length > 0 && <div className="warning wide" role="alert"><strong>親タスクの日程を超えます</strong><span>追加すると、{ancestorExtensions.map((change) => { const task = tasks.find((item) => item.id === change.taskId); return `${task?.title ?? "親タスク"}（${change.before.plannedEnd} → ${change.after.plannedEnd}）`; }).join("、")} の終了予定日を延長します。影響を確認のうえ、下のボタンから登録してください。</span></div>}
+      <div className="modal-actions"><button type="button" className="quiet-button" onClick={onClose}>キャンセル</button><button className="primary-button" disabled={saving || !form.title.trim()}>{taskCreateActionLabel(saving, ancestorExtensions.length)}</button></div>
     </form>
   </Modal>;
 }
@@ -393,7 +391,8 @@ function TaskEditor({ task, tasks, countryCode, projects, users, onChanged, onSc
 }) {
   const [form, setForm] = useState<WbsTaskForm>({ ...task, countryCode });
   const [saving, setSaving] = useState(false);
-  useEffect(() => setForm({ ...task, countryCode }), [task, countryCode]);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  useEffect(() => { setForm({ ...task, countryCode }); setConfirmingDelete(false); }, [task, countryCode]);
   const businessDays = businessDaysOrDefault(form.businessDays);
   const end = calculateEndDate(form.plannedStart, businessDays, countryCode);
 
@@ -423,7 +422,7 @@ function TaskEditor({ task, tasks, countryCode, projects, users, onChanged, onSc
     <FormFields form={form} setForm={setForm} projects={projects} users={users} tasks={tasks} currentTaskId={task.id} includeActual scheduleLocked={task.finalized} />
     <button type="button" className="child-task-button" onClick={onCreateChild}>＋ ロードマップ上でサブタスクを追加</button>
     <div className="editor-actions"><button className="primary-button" disabled={saving}>{saving ? "保存中…" : task.scheduleAssigned === false ? "日程を入力して配置" : "変更を保存"}</button></div>
-    <button type="button" className="danger-button" onClick={onDelete}>このタスクを削除</button>
+    {confirmingDelete ? <div className="warning wide" role="alert"><strong>このタスクを削除しますか？</strong><span>{tasks.some((candidate) => candidate.parentTaskId === task.id) ? "子タスクは削除せず、親なしのタスクとして残します。" : "削除後に元へ戻せません。"}</span><div className="inline-confirm-actions"><button type="button" className="quiet-button" onClick={() => setConfirmingDelete(false)}>削除しない</button><button type="button" className="danger-button" disabled={saving} onClick={onDelete}>削除する</button></div></div> : <button type="button" className="danger-button" onClick={() => setConfirmingDelete(true)}>このタスクを削除</button>}
   </form>;
 }
 

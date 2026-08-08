@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { taskCreateActionLabel } from "../../src/features/wbs/taskForm";
 import type { WbsTask } from "../../src/lib/wbs";
 import { availableWorkdays, buildAncestorEndExtensions, deriveParentProgress, expectedProgress, isTaskDelayed } from "../../src/lib/wbsPlanning";
 
@@ -8,6 +9,19 @@ const base: WbsTask = {
   countryCode: "JP", plannedStart: "2026-08-03", plannedEnd: "2026-08-14", businessDays: 10,
   actualStart: null, actualEnd: null, finalized: true,
 };
+
+describe("サブタスク登録操作の組み合わせ", () => {
+  // 因子: 保存状態（待機/保存中）、親日程の延長（なし/1件/複数件）。
+  it.each([
+    [false, 0, "登録する"],
+    [false, 1, "親日程を延長して登録"],
+    [false, 3, "親日程を延長して登録"],
+    [true, 0, "保存中…"],
+    [true, 2, "保存中…"],
+  ] as const)("saving=%s extensions=%s", (saving, extensionCount, expected) => {
+    expect(taskCreateActionLabel(saving, extensionCount)).toBe(expected);
+  });
+});
 
 describe("planned progress delay combinations", () => {
   // 因子: 確定状態（編集中/確定）、日付（開始前/期間中/終了日）、実績（計画未満/以上）、状態（進行中/完了）

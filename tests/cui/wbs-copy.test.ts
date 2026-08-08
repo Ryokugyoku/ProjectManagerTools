@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 const appSource = readFileSync(new URL("../../src/App.tsx", import.meta.url), "utf8");
 const timelineSource = readFileSync(new URL("../../src/features/wbs/TimelineBoard.tsx", import.meta.url), "utf8");
+const taskFormSource = readFileSync(new URL("../../src/features/wbs/taskForm.ts", import.meta.url), "utf8");
 
 describe("WBSの操作文言", () => {
   it("ロードマップへのタスク追加とサブタスク追加を区別する", () => {
@@ -25,8 +26,15 @@ describe("WBSの操作文言", () => {
     expect(appSource).toContain("<label>必要営業日数<input");
     expect(appSource).toContain("親タスクの日程を超えます");
     expect(appSource).toContain("buildAncestorEndExtensions");
-    expect(appSource).toContain("window.confirm");
+    expect(taskFormSource).toContain("親日程を延長して登録");
+    expect(appSource).not.toContain("window.confirm");
     expect(appSource).toContain("サブタスク追加による親日程の調整");
+  });
+
+  it("WBSの削除確認をTauri内で操作できる", () => {
+    expect(appSource).toContain("マイルストーンを削除しますか？");
+    expect(appSource).toContain("このタスクを削除しますか？");
+    expect(appSource).toContain("削除しない");
   });
 
   it("タスク入力では担当者と表示し、営業日数の1はプレースホルダーにする", () => {

@@ -14,6 +14,11 @@ export function businessDaysOrDefault(value: number | ""): number {
   return value === "" ? 1 : value;
 }
 
+export function taskCreateActionLabel(saving: boolean, ancestorExtensionCount: number): string {
+  if (saving) return "保存中…";
+  return ancestorExtensionCount > 0 ? "親日程を延長して登録" : "登録する";
+}
+
 export function requireDailyProgress(value: number | ""): number {
   if (value === "") throw new Error("その日に進んだ進捗を入力してください。");
   return value;

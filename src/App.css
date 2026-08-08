@@ -331,6 +331,8 @@ label small, .setting-row small { color: #66706b; font-weight: 400; line-height:
 
 .settings-screen { max-width: 860px; }.settings-card { overflow: hidden; }.settings-card section { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(240px, 1fr); gap: 34px; border-bottom: 1px solid #29312d; padding: 24px; }.settings-card section h2 { margin-bottom: 7px; }.settings-card section p { margin: 0; color: #717b76; font-size: .7rem; line-height: 1.6; }.settings-fields { display: grid; gap: 15px; }.toggle-field { display: flex; align-items: center; justify-content: space-between; }.toggle-field input { width: 20px; height: 20px; accent-color: #79f2a6; }.settings-actions { display: flex; justify-content: flex-end; padding: 16px 24px; }
 .global-error { position: fixed; z-index: 20; top: 14px; left: 50%; width: min(620px, calc(100% - 28px)); margin: 0; transform: translateX(-50%); box-shadow: 0 12px 50px rgba(0,0,0,.45); }
+.inline-confirm-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+.inline-confirm-actions .danger-button { width: auto; margin: 0; }
 
 @media (max-width: 760px) {
   .page-screen { width: min(100% - 24px, 1180px); padding: 24px 0; }
